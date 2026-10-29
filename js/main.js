@@ -11,7 +11,7 @@
   const App = {
     link: null, host: null, isHost: false, pid: null, lobby: null,
     screen: 'menu', view: null, role: null, snap: null,
-    t: 0, feed: [], js: null, resultAt: null, resultHits: [],
+    t: 0, pings: [], js: null, resultAt: null, resultHits: [],
     send(msg) { if (this.link) this.link.send(msg); },
   };
   FN.App = App;
@@ -137,10 +137,8 @@
     const me = App.lobby && App.lobby.players.find((p) => p.pid === App.pid);
     const role = late || !me ? 'spectator' : me.role;
     A.stopAll();
-    Object.assign(App, { snap: null, js: null, resultAt: null, feed: [], role });
-    if (role === 'guard') App.view = new V.GuardView(App);
-    else if (FN.CHARS.includes(role)) App.view = new V.AnimView(App, role);
-    else App.view = new V.SpectatorView(App);
+    Object.assign(App, { snap: null, js: null, resultAt: null, pings: [], role });
+    App.view = role === 'guard' ? new V.GuardView(App) : new V.SpectatorView(App);
     showScreen('game');
     if (late) toast('A night is already underway. You\'re spectating until the next one.');
   }
@@ -169,12 +167,13 @@
         A.stopAll();
         A.play('chime');
         return;
-      case 'feed':
-        App.feed.push({ msg: e.msg, at: App.t });
-        if (App.feed.length > 30) App.feed.shift();
+      case 'ping':
+        App.pings.push({ ...e, at: App.t });
+        if (App.pings.length > 10) App.pings.shift();
+        A.play('ping');
         return;
-      case 'msg':
-        toast(e.msg);
+      case 'left':
+        toast(`${e.name} left the night.`);
         return;
       case 'end':
         return;
@@ -183,12 +182,6 @@
   }
 
   // ---------------- lobby UI ----------------
-  const ROLE_ORDER = ['guard', 'bonnie', 'chica', 'foxy', 'freddy', 'spectator'];
-  const ROLE_BLURB = {
-    guard: 'Survive until 6 AM. Watch the cameras, check the lights, and shut the doors when something is there. Two guards can share the office.',
-    spectator: 'Watch the night unfold. Flip through every camera and the office.',
-  };
-
   function fillSelect(sel, entries) {
     sel.innerHTML = '';
     for (const [value, label] of entries) {
@@ -207,51 +200,47 @@
     $('lobby-label').textContent = L.online ? 'ROOM CODE' : 'SOLO NIGHT';
     $('lobby-code').textContent = L.online ? L.code : 'SOLO';
     $('btn-copy').classList.toggle('hidden', !L.online);
-    $('roles-wrap').classList.toggle('hidden', !L.online);
-    $('speed-field').classList.toggle('hidden', !L.online);
+    $('crew-wrap').classList.toggle('hidden', !L.online);
 
-    const roles = $('roles');
-    roles.innerHTML = '';
-    for (const role of ROLE_ORDER) {
-      const holders = L.players.filter((p) => p.role === role);
-      const isChar = FN.CHARS.includes(role);
-      const full = (role === 'guard' && holders.length >= FN.MAX_GUARDS) || (isChar && holders.length > 0);
-      const btn = document.createElement('button');
-      btn.className = 'role' + (role === myRole ? ' mine' : '') + (full && role !== myRole ? ' full' : '');
-      const title = document.createElement('div');
-      title.className = 'rname';
-      if (isChar) {
-        const sw = document.createElement('span');
-        sw.className = 'swatch';
-        sw.style.background = FN.CHAR_INFO[role].color;
-        title.appendChild(sw);
+    const crew = $('crew');
+    crew.innerHTML = '';
+    const guards = L.players.filter((p) => p.role === 'guard');
+    const watchers = L.players.filter((p) => p.role !== 'guard');
+    for (const p of guards) {
+      const li = document.createElement('li');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = p.color || '#ccc';
+      li.appendChild(dot);
+      li.appendChild(document.createTextNode(p.name));
+      const tags = [p.pid === L.hostPid ? 'host' : '', p.pid === App.pid ? 'you' : ''].filter(Boolean);
+      if (tags.length) {
+        const t = document.createElement('span');
+        t.className = 'tag';
+        t.textContent = ` (${tags.join(', ')})`;
+        li.appendChild(t);
       }
-      title.appendChild(document.createTextNode(role === 'guard' ? 'Night Guard' : role === 'spectator' ? 'Spectate' : FN.CHAR_INFO[role].short));
-      btn.appendChild(title);
-      const who = document.createElement('div');
-      who.className = 'who';
-      if (!holders.length) {
-        const s = document.createElement('span');
-        s.className = 'ai';
-        s.textContent = isChar ? 'AI controlled' : role === 'guard' ? 'Empty' : '-';
-        who.appendChild(s);
-      }
-      holders.forEach((p, i) => {
-        const s = document.createElement('span');
-        if (p.pid === App.pid) s.className = 'me';
-        s.textContent = p.name + (p.pid === L.hostPid ? ' (host)' : '');
-        who.appendChild(s);
-        if (i < holders.length - 1) who.appendChild(document.createTextNode(', '));
-      });
-      if (role === 'guard') who.appendChild(document.createTextNode(` (${holders.length}/${FN.MAX_GUARDS})`));
-      btn.appendChild(who);
-      btn.addEventListener('click', () => { if (role !== myRole) App.send({ t: 'role', role }); });
-      roles.appendChild(btn);
+      if (p.pid === App.pid) li.className = 'me';
+      crew.appendChild(li);
     }
-    $('role-blurb').textContent = ROLE_BLURB[myRole] || (FN.CHAR_INFO[myRole] ? FN.CHAR_INFO[myRole].blurb : '');
+    for (let i = guards.length; i < FN.MAX_GUARDS; i++) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'empty seat';
+      crew.appendChild(li);
+    }
+    $('watchers').textContent = watchers.length ? `Watching: ${watchers.map((p) => p.name + (p.pid === App.pid ? ' (you)' : '')).join(', ')}` : '';
+    const roleBtn = $('btn-role');
+    roleBtn.textContent = myRole === 'guard' ? 'Sit this one out (spectate)' : 'Join the night crew';
+    roleBtn.disabled = L.phase !== 'lobby' || (myRole !== 'guard' && guards.length >= FN.MAX_GUARDS);
+    const n = Math.max(1, guards.length);
+    const saved = Math.round((1 - FN.teamPower(n)) * 100);
+    $('crew-hint').textContent = n < 2
+      ? 'Everyone shares the office: the doors, the lights and the power. Bring friends!'
+      : `With ${n} guards the animatronics get +${FN.teamBonus(n)} AI, but the office battery drains ${saved}% slower.`;
 
     const S = L.settings;
-    const sets = { 'set-night': String(S.night), 'set-length': S.length, 'set-speed': S.speed };
+    const sets = { 'set-night': String(S.night), 'set-length': S.length };
     for (const [id, v] of Object.entries(sets)) {
       const el = $(id);
       el.disabled = !App.isHost;
@@ -283,7 +272,7 @@
     const hasGuard = L.players.some((p) => p.role === 'guard');
     $('btn-start').disabled = !hasGuard || L.phase !== 'lobby';
     if (!App.isHost) setStatus('lobby-status', L.phase === 'lobby' ? 'Waiting for the host to start the night...' : 'A night is in progress...');
-    else setStatus('lobby-status', hasGuard ? '' : 'Someone needs to be the Night Guard.');
+    else setStatus('lobby-status', hasGuard ? '' : 'Someone needs to be on the night crew.');
   }
 
   function sendSettings() {
@@ -292,7 +281,7 @@
     for (const c of FN.CHARS) custom[c] = Number($('ai-' + c).value) || 0;
     App.send({
       t: 'settings',
-      settings: { night: Number($('set-night').value), length: $('set-length').value, speed: $('set-speed').value, custom },
+      settings: { night: Number($('set-night').value), length: $('set-length').value, custom },
     });
   }
 
@@ -404,8 +393,7 @@
 
   // ---------------- DOM wiring ----------------
   fillSelect($('set-length'), Object.entries(FN.LENGTHS).map(([k, v]) => [k, v.label]));
-  fillSelect($('set-speed'), Object.entries(FN.SPEEDS).map(([k, v]) => [k, v.label]));
-  for (const id of ['set-night', 'set-length', 'set-speed']) $(id).addEventListener('change', sendSettings);
+  for (const id of ['set-night', 'set-length']) $(id).addEventListener('change', sendSettings);
 
   try { $('name').value = localStorage.getItem('fnaf-name') || ''; } catch (e) { /* storage blocked */ }
   const q = new URLSearchParams(location.search);
@@ -422,6 +410,10 @@
   $('btn-help-close').addEventListener('click', () => $('help').classList.add('hidden'));
   $('btn-leave').addEventListener('click', () => leave());
   $('btn-start').addEventListener('click', () => { A.init(); App.send({ t: 'start' }); });
+  $('btn-role').addEventListener('click', () => {
+    const me = App.lobby && App.lobby.players.find((p) => p.pid === App.pid);
+    App.send({ t: 'role', role: me && me.role === 'guard' ? 'spectator' : 'guard' });
+  });
   $('btn-copy').addEventListener('click', async () => {
     const link = inviteLink();
     try {

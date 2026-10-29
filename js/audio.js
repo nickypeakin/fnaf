@@ -221,6 +221,11 @@
       tone(d, { dur: 0.08, type: 'square', freq: 90, vol: 0.4 });
       noise(d, { dur: 0.6, freq: 300, vol: 0.5 });
     },
+    ping() {
+      const d = out(0, 0.6);
+      tone(d, { dur: 0.12, type: 'square', freq: 880, vol: 0.12 });
+      tone(d, { t: now() + 0.13, dur: 0.18, type: 'square', freq: 1320, vol: 0.12 });
+    },
     honk() { tone(out(0, 0.6), { dur: 0.16, type: 'square', freq: 370, to: 330, vol: 0.25 }); },
     chime() {
       const d = out(0, 0.8);

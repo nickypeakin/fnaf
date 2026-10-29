@@ -134,29 +134,15 @@ input:focus, select:focus { border-color: var(--accent); }
 .label { color: var(--dim); font-size: 18px; letter-spacing: 3px; }
 .code { font-size: 64px; letter-spacing: 12px; line-height: 1; color: #fff; text-shadow: 0 0 10px rgba(255, 255, 255, 0.4); }
 
-.roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.role {
-  border: 1px solid var(--line);
-  background: #0d0d10;
-  padding: 10px 12px;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  color: var(--ink);
-  min-height: 96px;
-  position: relative;
-}
-.role:hover { border-color: #777; }
-.role.mine { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.role.full { cursor: not-allowed; }
-.role .rname { font-size: 26px; display: flex; align-items: center; gap: 8px; }
-.role .swatch { width: 14px; height: 14px; display: inline-block; }
-.role .who { color: var(--dim); font-size: 19px; margin-top: 4px; }
-.role .who .me { color: var(--accent); }
-.role .who .ai { color: #6c6c68; }
+.crew { list-style: none; margin: 0 0 6px; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px; }
+.crew li { display: flex; align-items: center; gap: 10px; font-size: 26px; border: 1px solid var(--line); background: #0d0d10; padding: 6px 12px; }
+.crew li.me { border-color: var(--accent); }
+.crew li.empty { color: #4a4a48; font-size: 20px; }
+.crew .dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex: none; }
+.crew .tag { color: var(--dim); font-size: 19px; }
 
 .blurb { color: var(--dim); font-size: 19px; min-height: 2.4em; margin: 10px 0 0; }
-.settings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.settings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .settings .field { margin: 0; }
 .custom { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
 .custom .field input { width: 100%; }
@@ -214,7 +200,7 @@ input:focus, select:focus { border-color: var(--accent); }
   .screen { flex-direction: column; align-items: stretch; padding: 16px; }
   .menu-panel, .help, .lobby-panel { width: 100%; }
   .title { font-size: 54px; }
-  .roles { grid-template-columns: repeat(2, 1fr); }
+  .crew { grid-template-columns: 1fr; }
   .settings { grid-template-columns: 1fr; }
   .custom { grid-template-columns: repeat(2, 1fr); }
   .code { font-size: 48px; letter-spacing: 8px; }

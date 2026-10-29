@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Five Nights at Freddy's: Multiplayer</title>
-  <meta name="description" content="An unofficial multiplayer take on Five Nights at Freddy's. Be the night guard, or play as the animatronics hunting them.">
+  <meta name="description" content="An unofficial co-op take on Five Nights at Freddy's. Share the office with your friends and survive the night together.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
@@ -19,7 +19,7 @@
   <section id="menu" class="screen">
     <div class="panel menu-panel">
       <h1 class="title">Five<br>Nights<br>at<br>Freddy's</h1>
-      <div class="subtitle">MULTIPLAYER</div>
+      <div class="subtitle">CO-OP</div>
 
       <label class="field">
         <span>Your name</span>
@@ -27,7 +27,7 @@
       </label>
 
       <button id="btn-solo" class="btn">&gt;&gt; Play solo</button>
-      <button id="btn-host" class="btn">&gt;&gt; Host online game</button>
+      <button id="btn-host" class="btn">&gt;&gt; Host a game with friends</button>
       <div class="join-row">
         <input id="join-code" maxlength="5" autocomplete="off" spellcheck="false" placeholder="CODE">
         <button id="btn-join" class="btn">&gt;&gt; Join</button>
@@ -39,27 +39,27 @@
 
     <div id="help" class="panel help hidden">
       <h2>How to play</h2>
-      <h3>Night guard</h3>
+      <h3>Surviving the night</h3>
       <ul>
-        <li>Survive from 12 AM until 6 AM.</li>
+        <li>Survive from 12 AM until 6 AM. Freddy, Bonnie, Chica and Foxy roam the pizzeria and want in.</li>
         <li><b>Doors</b> (Q / E) block anyone in the doorway. <b>Lights</b> (A / D) show who is standing there.</li>
         <li><b>Monitor</b> (Space, or hover the bar at the bottom) shows the cameras. Click a camera on the map, or use the arrow keys.</li>
+        <li>You can't reach the door and light buttons while your monitor is up.</li>
         <li>Everything uses power. If it runs out, the doors open, the lights die, and Freddy comes for you.</li>
-        <li>If someone gets into the office, the door and light on that side stop working. They'll get you as soon as you look away from the monitor.</li>
+        <li>If something gets into the office, the door and light on that side stop working, and it strikes the moment anyone is off their monitor.</li>
       </ul>
-      <h3>Animatronics</h3>
+      <h3>Playing together</h3>
       <ul>
-        <li>Click a glowing room on the map to move there. Each move has a cooldown.</li>
-        <li>Yellow outlines on your map show which cameras the guards are watching. A big eye means they're looking at <i>you</i>.</li>
-        <li><b>Bonnie &amp; Chica</b>: get to your doorway, wait a few seconds, then <b>Sneak in</b> if the door is open. A door shut in your face sends you back.</li>
-        <li><b>Freddy</b>: can only move while nobody is watching him. From the East Hall Corner he can slip in while the guard is on the monitor.</li>
-        <li><b>Foxy</b>: creep out of Pirate Cove while nobody watches, then <b>Run</b>. A closed door costs the guard power.</li>
-        <li><b>Jam camera</b> (J) fills your camera with static for a few seconds.</li>
+        <li>Everyone is a guard in the same office. The doors, lights and power are shared, and every guard has their own monitor.</li>
+        <li>Split the jobs: someone on the left door, someone on the right, someone on the cameras.</li>
+        <li><b>Call out</b> (F) flashes the camera you're watching, or the door you're facing, on everyone's screen.</li>
+        <li>The team list shows where everybody is looking. Dots on the camera map show which cameras your teammates are on.</li>
+        <li>Bigger crews face more aggressive animatronics, but get a longer-lasting battery.</li>
       </ul>
-      <h3>Multiplayer</h3>
+      <h3>Hosting</h3>
       <ul>
         <li>One person hosts and shares the 5-letter code (or the invite link). Everyone else joins with it.</li>
-        <li>Up to 2 guards (co-op) and one player per animatronic. Animatronics nobody picks are run by the AI.</li>
+        <li>Up to 6 guards per night; anyone else can watch.</li>
         <li>No server needed. Players connect directly to the host's browser, so the host should keep the tab open.</li>
       </ul>
       <button id="btn-help-close" class="btn small">Close</button>
@@ -80,10 +80,12 @@
         </div>
       </div>
 
-      <div id="roles-wrap">
-        <h2>Pick your role</h2>
-        <div id="roles" class="roles"></div>
-        <p id="role-blurb" class="blurb"></p>
+      <div id="crew-wrap">
+        <h2>The night crew</h2>
+        <ul id="crew" class="crew"></ul>
+        <p id="watchers" class="hint"></p>
+        <button id="btn-role" class="btn small"></button>
+        <p id="crew-hint" class="blurb"></p>
       </div>
 
       <h2>Settings</h2>
@@ -96,10 +98,9 @@
           </select>
         </label>
         <label class="field"><span>Length</span><select id="set-length"></select></label>
-        <label class="field" id="speed-field"><span>Player animatronic speed</span><select id="set-speed"></select></label>
       </div>
       <div id="custom" class="custom hidden"></div>
-      <p class="hint" id="ai-hint">AI difficulty follows the night. Animatronics played by people use the speed setting instead. Auto slows them down when they outnumber the guards.</p>
+      <p class="hint" id="ai-hint">Survive a night and the next one is queued up. Custom night lets you set each animatronic's AI from 0 to 20.</p>
 
       <button id="btn-start" class="btn big">&gt;&gt; Start night</button>
       <p id="lobby-status" class="status" role="status"></p>

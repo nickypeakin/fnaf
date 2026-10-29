@@ -898,7 +898,7 @@
   };
   Art.MAP = MAP;
 
-  // mode 'guard': cam buttons. mode 'anim': clickable rooms.
+  // The camera map. o: {cam: selected, marks: {cam: [teammate colours]}, pings: [{cam, color}], t}
   Art.drawMap = function (ctx, ox, oy, o) {
     const hits = [];
     ctx.save();
@@ -906,57 +906,32 @@
     ctx.lineWidth = 3;
     for (const [id, [x, y, w, h]] of Object.entries(MAP.rooms)) {
       const door = id === 'LD' || id === 'RD';
-      let fill = door ? 'rgba(90,90,90,0.5)' : 'rgba(20,20,22,0.55)';
-      if (o.mode === 'anim') {
-        if (id === o.here) fill = 'rgba(180,30,30,0.7)';
-        else if (o.adj && o.adj.includes(id)) fill = `rgba(40,160,60,${0.35 + 0.25 * Math.sin(o.t * 5)})`;
-      }
-      ctx.fillStyle = fill;
+      ctx.fillStyle = door ? 'rgba(90,90,90,0.5)' : 'rgba(20,20,22,0.55)';
       ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = door ? '#888' : '#d8d8d8';
       ctx.strokeRect(x, y, w, h);
-      if (o.mode === 'anim' && o.adj && o.adj.includes(id)) hits.push({ room: id, x: ox + x - 6, y: oy + y - 6, w: w + 12, h: h + 12 });
     }
-    if (o.mode === 'guard') {
-      const [x, y, w, h] = MAP.rooms.OF;
-      text(ctx, 'YOU', x + w / 2, y + h / 2, 20, '#fff', 'center');
-      for (const [cam, [bx, by]] of Object.entries(MAP.cams)) {
-        const sel = cam === o.cam;
-        ctx.fillStyle = sel ? '#5a9e3a' : '#5a5a5a';
-        ctx.fillRect(bx, by, 50, 32);
-        ctx.strokeStyle = sel ? '#b8f090' : '#c8c8c8';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(bx, by, 50, 32);
-        text(ctx, 'CAM', bx + 25, by + 9, 14, '#fff', 'center');
-        text(ctx, cam, bx + 25, by + 23, 18, '#fff', 'center');
-        hits.push({ cam, x: ox + bx, y: oy + by, w: 50, h: 32 });
-      }
-    } else {
-      const counts = {};
-      for (const who of FN.CHARS) {
-        const room = o.positions[who];
-        const r = MAP.rooms[room === 'OF' ? 'OF' : room];
-        if (!r) continue;
-        const k = (counts[room] = (counts[room] || 0) + 1) - 1;
-        const cx = r[0] + 12 + (k % 2) * 20, cy = r[1] + 12 + Math.floor(k / 2) * 20;
-        ell(ctx, cx, cy, 10, 10, FN.CHAR_INFO[who].color);
-        ctx.lineWidth = who === o.me ? 3 : 1;
-        ctx.strokeStyle = who === o.me ? '#fff' : '#000';
+    const [ox2, oy2, ow, oh] = MAP.rooms.OF;
+    text(ctx, 'YOU', ox2 + ow / 2, oy2 + oh / 2, 20, '#fff', 'center');
+    const flash = Math.sin((o.t || 0) * 12) > 0;
+    for (const [cam, [bx, by]] of Object.entries(MAP.cams)) {
+      const sel = cam === o.cam;
+      const ping = (o.pings || []).find((p) => p.cam === cam);
+      ctx.fillStyle = sel ? '#5a9e3a' : '#5a5a5a';
+      ctx.fillRect(bx, by, 50, 32);
+      ctx.strokeStyle = ping && flash ? ping.color : sel ? '#b8f090' : '#c8c8c8';
+      ctx.lineWidth = ping ? 4 : 2;
+      ctx.strokeRect(bx - (ping ? 3 : 0), by - (ping ? 3 : 0), 50 + (ping ? 6 : 0), 32 + (ping ? 6 : 0));
+      text(ctx, 'CAM', bx + 25, by + 9, 14, '#fff', 'center');
+      text(ctx, cam, bx + 25, by + 23, 18, '#fff', 'center');
+      const marks = (o.marks && o.marks[cam]) || [];
+      marks.forEach((col, k) => {
+        ell(ctx, bx + 50 - 6 - k * 11, by + 6, 5, 5, col);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#000';
         ctx.stroke();
-        text(ctx, FN.CHAR_INFO[who].tag, cx, cy + 1, 15, '#000', 'center');
-      }
-      for (const cam of FN.CAMS) {
-        const r = MAP.rooms[cam];
-        if (o.watched && o.watched.includes(cam)) {
-          ctx.strokeStyle = '#ffd23a';
-          ctx.lineWidth = 3;
-          ctx.setLineDash([6, 4]);
-          ctx.strokeRect(r[0] - 3, r[1] - 3, r[2] + 6, r[3] + 6);
-          ctx.setLineDash([]);
-        }
-      }
-      const [x, y, w, h] = MAP.rooms.OF;
-      text(ctx, 'GUARD', x + w / 2, y + h - 10, 14, '#ffb0b0', 'center');
+      });
+      hits.push({ cam, x: ox + bx, y: oy + by, w: 50, h: 32 });
     }
     ctx.restore();
     return hits;

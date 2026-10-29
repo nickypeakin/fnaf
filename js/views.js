@@ -1,5 +1,5 @@
-// In-game views. Each player sees one of: GuardView (the office + cameras),
-// AnimView (an animatronic hunting the guard) or SpectatorView.
+// In-game views. Every player is a night guard (GuardView) sharing one office;
+// anyone past the guard limit, or who joins mid-night, gets the SpectatorView.
 // Views render from the latest host snapshot and send inputs through app.send().
 (function () {
   'use strict';
@@ -14,6 +14,8 @@
   const nightLabel = (n) => (n === 7 ? 'Custom Night' : `Night ${n}`);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const camName = (room) => (FN.ROOMS[room] ? FN.ROOMS[room].name : room);
+  const LOOK_TEXT = { L: 'left door', C: 'the desk', R: 'right door' };
+  const PING_TEXT = { L: 'LEFT DOOR!', C: 'HEADS UP!', R: 'RIGHT DOOR!' };
 
   function hitTest(hits, x, y) {
     for (let i = hits.length - 1; i >= 0; i--) {
@@ -24,13 +26,12 @@
   }
 
   function button(ctx, hits, b) {
-    ctx.fillStyle = b.enabled ? (b.hot ? 'rgba(150,26,18,0.9)' : 'rgba(28,28,32,0.9)') : 'rgba(16,16,18,0.75)';
+    ctx.fillStyle = b.enabled ? 'rgba(28,28,32,0.85)' : 'rgba(16,16,18,0.7)';
     ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = b.enabled ? (b.hot ? '#ffb0a0' : '#cfcfc8') : '#3e3e42';
+    ctx.strokeStyle = b.enabled ? '#cfcfc8' : '#3e3e42';
     ctx.lineWidth = 2;
     ctx.strokeRect(b.x, b.y, b.w, b.h);
-    text(ctx, b.label, b.x + b.w / 2, b.y + b.h / 2 - (b.sub ? 9 : 0), b.size || 32, b.enabled ? '#fff' : '#6a6a6a', 'center');
-    if (b.sub) text(ctx, b.sub, b.x + b.w / 2, b.y + b.h - 15, 19, b.enabled ? '#e0d0c0' : '#6a6a6a', 'center');
+    text(ctx, b.label, b.x + b.w / 2, b.y + b.h / 2, b.size || 32, b.enabled ? '#fff' : '#6a6a6a', 'center');
     if (b.enabled) hits.push({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h });
   }
 
@@ -49,35 +50,65 @@
     }
   }
 
-  function watchedCams(snap) {
-    return Object.values(snap.guards).filter((g) => g.up && !snap.glitch[g.cam]).map((g) => g.cam);
+  // The team list: who's on which camera, who's watching which door.
+  function drawTeam(ctx, snap, myPid, y0) {
+    const guards = Object.entries(snap.guards);
+    if (guards.length < 2 && myPid) return;
+    let y = y0;
+    text(ctx, 'TEAM', 30, y, 24, '#8d8d86');
+    y += 26;
+    for (const [pid, g] of guards) {
+      ell(ctx, 38, y, 7, 7, g.color || '#ccc');
+      const what = g.up ? `CAM ${g.cam}  ${camName(g.cam)}` : LOOK_TEXT[g.look] || 'the office';
+      text(ctx, `${g.name}${pid === myPid ? ' (you)' : ''}: ${what}`, 52, y, 24, pid === myPid ? '#f2f2ec' : '#c8d8c0');
+      y += 25;
+    }
   }
 
-  function eyeIcon(ctx, x, y, s, t) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.beginPath();
-    ctx.moveTo(-40 * s, 0);
-    ctx.quadraticCurveTo(0, -34 * s, 40 * s, 0);
-    ctx.quadraticCurveTo(0, 34 * s, -40 * s, 0);
-    ctx.fillStyle = '#f2eee0';
-    ctx.fill();
-    ell(ctx, 0, 0, 14 * s, 14 * s, '#b01e14');
-    ell(ctx, 0, 0, 6 * s * (0.8 + 0.2 * Math.sin(t * 6)), 6 * s, '#000');
-    ctx.restore();
+  // Monitor markers for the map: which cameras teammates are on, and live call-outs.
+  function mapMarks(snap, myPid, pings, now) {
+    const marks = {};
+    for (const [pid, g] of Object.entries(snap.guards)) {
+      if (!g.up || pid === myPid) continue;
+      (marks[g.cam] = marks[g.cam] || []).push(g.color || '#ccc');
+    }
+    const live = pings.filter((p) => p.cam && now - p.at < T.pingTime).map((p) => ({ cam: p.cam, color: p.color }));
+    return { marks, pings: live };
+  }
+
+  function drawCallouts(ctx, pings, now) {
+    const live = pings.filter((p) => now - p.at < T.pingTime).slice(-3);
+    let y = 150;
+    for (const p of live) {
+      const a = clamp(T.pingTime - (now - p.at), 0, 1);
+      ctx.globalAlpha = a;
+      const msg = `${p.name.toUpperCase()}: ${p.cam ? `CHECK CAM ${p.cam}!` : PING_TEXT[p.side] || 'HEADS UP!'}`;
+      ctx.font = `34px ${Art.FONT}`;
+      const w = ctx.measureText(msg).width + 40;
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillRect(W / 2 - w / 2, y - 22, w, 44);
+      ctx.strokeStyle = p.color || '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - w / 2, y - 22, w, 44);
+      text(ctx, msg, W / 2, y, 34, p.color || '#fff', 'center');
+      ctx.globalAlpha = 1;
+      y += 52;
+    }
   }
 
   // ---------- shared overlays ----------
   const Overlays = {
-    intro(ctx, snap, t) {
+    intro(ctx, snap) {
       if (snap.t > 4) return;
       const a = snap.t < 3 ? 1 : 1 - (snap.t - 3);
       ctx.fillStyle = `rgba(0,0,0,${a})`;
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = a;
       text(ctx, '12:00 AM', W / 2, H / 2 - 30, 72, '#fff', 'center');
-      const ord = ['1st', '2nd', '3rd', '4th', '5th', '6th', 'Custom'][snap.night - 1];
+      const ord = ['1st', '2nd', '3rd', '4th', '5th', '6th'][snap.night - 1];
       text(ctx, snap.night === 7 ? 'Custom Night' : `${ord} Night`, W / 2, H / 2 + 36, 44, '#fff', 'center');
+      const n = Object.keys(snap.guards).length;
+      if (n > 1) text(ctx, `${n} guards on shift. The animatronics are restless tonight (+${snap.bonus} AI).`, W / 2, H / 2 + 96, 28, '#a0a098', 'center');
       ctx.globalAlpha = 1;
     },
 
@@ -95,6 +126,8 @@
     result(ctx, res, k, t, app, hits) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, W, H);
+      const names = res.guards || [];
+      const team = names.length > 1;
       if (res.winner === 'guards') {
         const roll = clamp((k - 1) / 1.6, 0, 1);
         const ease = roll * roll * (3 - 2 * roll);
@@ -107,8 +140,8 @@
         ctx.restore();
         text(ctx, 'AM', W / 2 + 40, H / 2 - 40, 140, '#fff', 'center');
         if (k > 3.2) {
-          const guards = (app.lobby ? app.lobby.players : []).filter((p) => p.role === 'guard').map((p) => p.name);
-          text(ctx, `${guards.join(' & ') || 'The guard'} survived ${nightLabel(res.night)}!`, W / 2, H / 2 + 90, 40, '#d8c25a', 'center');
+          const who = names.length > 2 ? `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}` : names.join(' & ') || 'The guard';
+          text(ctx, `${who} survived ${nightLabel(res.night)}!`, W / 2, H / 2 + 90, 40, '#d8c25a', 'center');
         }
       } else if (res.winner === 'anims') {
         if (k < 2.2) Art.staticScreen(ctx, t, 1);
@@ -116,10 +149,9 @@
           Art.staticScreen(ctx, t, 0.18);
           text(ctx, 'Game Over', W - 60, H - 70, 64, '#f2f2ec', 'right');
           const who = FN.CHAR_INFO[res.who] ? FN.CHAR_INFO[res.who].short : 'Something';
-          const by = res.by ? `${who} (${res.by})` : `${who} (AI)`;
-          text(ctx, res.powerOut ? 'The power ran out...' : '', W / 2, H / 2 - 60, 34, '#a0a098', 'center');
-          text(ctx, `${by} got the guard.`, W / 2, H / 2, 46, '#e04a3a', 'center');
-          text(ctx, 'The animatronics win!', W / 2, H / 2 + 50, 34, '#cfcfc8', 'center');
+          if (res.powerOut) text(ctx, 'The power ran out...', W / 2, H / 2 - 60, 34, '#a0a098', 'center');
+          text(ctx, `${who} got ${team ? 'the whole team' : names[0] || 'the guard'}.`, W / 2, H / 2, 46, '#e04a3a', 'center');
+          text(ctx, `Made it to ${hourLabel(Math.floor(res.t / (app.snap ? app.snap.hourLen : 89)))}.`, W / 2, H / 2 + 50, 32, '#cfcfc8', 'center');
         }
       } else {
         text(ctx, res.reason || 'The night was abandoned.', W / 2, H / 2, 40, '#cfcfc8', 'center');
@@ -140,6 +172,7 @@
       this.monK = 0;
       this.cam = '1A';
       this.camT = -10;
+      this.look = 'C';
       this.door = { L: 0, R: 0 };
       this.pend = {};
       this.shown = { L: false, R: false };
@@ -171,8 +204,11 @@
 
     blocked() { const s = this.app.snap; return !!(s.powerOut || s.jumpscare || s.ended); }
 
+    // The buttons are on the wall: you can only reach them with your monitor down.
+    canReach() { return !this.blocked() && !this.mon && this.monK === 0; }
+
     pressDoor(s) {
-      if (this.blocked()) return;
+      if (!this.canReach()) return;
       if (this.app.snap.broken[s]) { A.play('dud', { pan: s === 'L' ? -0.6 : 0.6 }); return; }
       const v = !this.doorOn(s);
       this.pend['door' + s] = { v, at: performance.now() };
@@ -180,7 +216,7 @@
     }
 
     pressLight(s) {
-      if (this.blocked()) return;
+      if (!this.canReach()) return;
       if (this.app.snap.broken[s]) { A.play('dud', { pan: s === 'L' ? -0.6 : 0.6 }); return; }
       const v = !this.lightOn(s);
       this.pend['light' + s] = { v, at: performance.now() };
@@ -207,7 +243,12 @@
       this.sendMon();
     }
 
-    sendMon() { this.app.send({ t: 'in', a: 'mon', up: this.mon, cam: this.cam }); }
+    sendMon() { this.app.send({ t: 'in', a: 'mon', up: this.mon, cam: this.cam, look: this.look }); }
+
+    ping() {
+      if (this.blocked() || Object.keys(this.app.snap.guards).length < 2) return;
+      this.app.send({ t: 'in', a: 'ping' });
+    }
 
     update(dt) {
       const snap = this.app.snap;
@@ -229,7 +270,11 @@
         if (x < edge) this.scroll -= ((edge - x) / edge) * 950 * dt;
         if (x > W - edge) this.scroll += ((x - (W - edge)) / edge) * 950 * dt;
       }
-      this.scroll = clamp(this.scroll, 0, OFF().W - W);
+      const max = OFF().W - W;
+      this.scroll = clamp(this.scroll, 0, max);
+      // Tell the team which way we're looking (only when it changes).
+      const look = this.scroll < max * 0.3 ? 'L' : this.scroll > max * 0.7 ? 'R' : 'C';
+      if (look !== this.look) { this.look = look; this.sendMon(); }
       this.flickT -= dt;
       if (powered && this.flickT < -2 && Math.random() < dt * 0.25) this.flickT = 0.05 + Math.random() * 0.15;
       this.dim = this.flickT > 0 ? 0.4 : 0;
@@ -258,16 +303,30 @@
         };
         Art.blitOffice(ctx, Art.renderOffice(v), this.scroll);
         if (this.monK > 0) this.drawTablet(ctx, t);
+        else this.drawPingArrows(ctx, t);
       } else {
         this.drawCams(ctx, t);
       }
       if (snap.powerOut && snap.powerOut.phase === 'dark') return;
       drawClock(ctx, snap);
+      drawTeam(ctx, snap, this.app.pid, this.monK >= 1 ? 100 : 60);
+      drawCallouts(ctx, this.app.pings, this.app.t);
       if (!snap.powerOut) {
         drawPower(ctx, snap);
         this.drawBar(ctx);
+        if (Object.keys(snap.guards).length > 1) button(ctx, this.hits, { id: 'ping', x: 30, y: H - 156, w: 190, h: 42, label: 'CALL OUT (F)', size: 26, enabled: true });
       }
-      this.drawPartner(ctx);
+    }
+
+    // Arrows at the edge of the office pointing at a door a teammate just called out.
+    drawPingArrows(ctx, t) {
+      const now = this.app.t;
+      for (const p of this.app.pings) {
+        if (p.cam || p.side === 'C' || now - p.at > T.pingTime || Math.sin(t * 10) < 0) continue;
+        const x = p.side === 'L' ? 40 : W - 40;
+        const d = p.side === 'L' ? -1 : 1;
+        poly(ctx, [[x + d * 22, H / 2], [x - d * 14, H / 2 - 34], [x - d * 14, H / 2 + 34]], p.color || '#fff');
+      }
     }
 
     drawTablet(ctx, t) {
@@ -299,7 +358,8 @@
       ctx.lineWidth = 3;
       ctx.strokeRect(24, 24, W - 48, H - 48);
       text(ctx, camName(this.cam), 1060, 318, 36, '#f2f2ec', 'center');
-      this.hits.push(...Art.drawMap(ctx, 860, 340, { mode: 'guard', cam: this.cam }));
+      const mm = mapMarks(snap, this.app.pid, this.app.pings, this.app.t);
+      this.hits.push(...Art.drawMap(ctx, 860, 340, { cam: this.cam, marks: mm.marks, pings: mm.pings, t }));
     }
 
     drawBar(ctx) {
@@ -323,17 +383,6 @@
         }
       }
       this.bar = b;
-    }
-
-    drawPartner(ctx) {
-      const snap = this.app.snap;
-      const others = Object.entries(snap.guards).filter(([pid]) => pid !== this.app.pid);
-      let y = 104;
-      for (const [, g] of others) {
-        const s = g.up ? `watching CAM ${g.cam} (${camName(g.cam)})` : 'looking around the office';
-        text(ctx, `${g.name}: ${s}`, 30, y, 24, '#b8d0b0');
-        y += 26;
-      }
     }
 
     inBar(x, y) { const b = this.bar; return b && x >= b.x && x <= b.x + b.w && y >= b.y - 10 && y <= b.y + b.h + 10; }
@@ -367,8 +416,9 @@
       this.drag = null;
       if (wasDrag) return;
       if (touch && this.inBar(x, y) && !snap.powerOut) { this.setMon(!this.mon); return; }
+      const h = hitTest(this.hits, x, y);
+      if (h && h.id === 'ping') { this.ping(); return; }
       if (this.mon) {
-        const h = hitTest(this.hits, x, y);
         if (h && h.cam) this.setCam(h.cam);
         return;
       }
@@ -387,6 +437,7 @@
     key(e) {
       const k = e.key.toLowerCase();
       if (k === ' ' || k === 's') { this.setMon(!this.mon); return true; }
+      if (k === 'f') { this.ping(); return true; }
       if (k === 'q') { this.pressDoor('L'); return true; }
       if (k === 'e') { this.pressDoor('R'); return true; }
       if (k === 'a') { this.pressLight('L'); return true; }
@@ -418,272 +469,6 @@
         case 'music': A.loop('music', true, 0.8); break;
         case 'musicstop': A.loop('music', false); break;
       }
-    }
-  }
-
-  // ======================= ANIMATRONIC =======================
-  class AnimView {
-    constructor(app, who) {
-      this.app = app;
-      this.who = who;
-      this.hits = [];
-      A.loop('ambience', true, 0.4);
-    }
-
-    update() {}
-    onSnap() {}
-
-    room() {
-      const a = this.app.snap.anims[this.who];
-      if (this.who === 'foxy') return a.runT >= 0 ? '2A' : '1C';
-      return a.room;
-    }
-
-    watched() {
-      const snap = this.app.snap;
-      return watchedCams(snap).includes(this.room());
-    }
-
-    draw(ctx, t) {
-      const snap = this.app.snap;
-      const a = snap.anims[this.who];
-      const room = this.room();
-      const info = FN.CHAR_INFO[this.who];
-      this.hits = [];
-
-      if (room === 'LD' || room === 'RD') this.drawDoorPOV(ctx, room === 'LD' ? 'L' : 'R', t);
-      else if (room === 'OF') this.drawInside(ctx, t);
-      else if (room === '6') this.drawKitchen(ctx, t);
-      else {
-        Art.drawRoom(ctx, room, snap, 0.5 + 0.5 * Math.sin(t * 0.2), t);
-        Art.camEffects(ctx, t, snap.glitch[room] ? 0.35 : 0, 'rgba(110,0,0,0.12)');
-      }
-      if (snap.powerOut) {
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(0, 0, W, H);
-        text(ctx, 'THE POWER IS OUT', W / 2, 200, 54, '#e04a3a', 'center');
-        text(ctx, 'Freddy is coming for the guard...', W / 2, 250, 32, '#cfcfc8', 'center');
-      }
-
-      // status panel
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.fillRect(20, 44, 440, 176);
-      ctx.fillStyle = info.color;
-      ctx.fillRect(20, 44, 8, 176);
-      text(ctx, `YOU ARE ${info.short.toUpperCase()}`, 40, 70, 36, info.color);
-      const where = room === 'LD' || room === 'RD' || room === 'OF' ? camName(room)
-        : this.who === 'foxy' && a.runT < 0 ? `Pirate Cove (stage ${a.stage + 1}/3)` : `${camName(room)} (CAM ${room})`;
-      text(ctx, where, 40, 104, 26, '#e8e8e2');
-      const cdMax = T.playerCooldown[this.who] * (snap.speed || 1);
-      if (room === 'OF') text(ctx, 'Inside the office!', 40, 136, 26, '#ff9a8a');
-      else if (this.who === 'foxy' && a.runT >= 0) text(ctx, 'RUNNING!', 40, 136, 26, '#ff9a8a');
-      else if (a.cd > 0) {
-        text(ctx, `Next move in ${a.cd.toFixed(1)}s`, 40, 136, 26, '#d8c25a');
-        ctx.fillStyle = '#333';
-        ctx.fillRect(40, 152, 400, 8);
-        ctx.fillStyle = '#d8c25a';
-        ctx.fillRect(40, 152, 400 * (1 - clamp(a.cd / Math.max(cdMax, T.repelCooldown), 0, 1)), 8);
-      } else text(ctx, 'Ready to move', 40, 136, 26, '#7fd060');
-      const guards = Object.values(snap.guards);
-      const gtxt = guards.map((g) => (g.up ? `on CAM ${g.cam}` : 'in the office')).join(' / ') || 'none';
-      text(ctx, `Guard power: ${Math.ceil(snap.power)}%`, 40, 178, 24, '#b0b0a8');
-      text(ctx, `Guard: ${gtxt}`, 40, 204, 24, '#b0b0a8');
-
-      if (this.watched() && room !== 'OF') {
-        eyeIcon(ctx, W / 2, 70, 1.1, t);
-        text(ctx, this.who === 'freddy' ? 'WATCHED - YOU CAN\'T MOVE' : 'THE GUARD IS WATCHING YOU', W / 2, 120, 30, '#ffdf60', 'center');
-      }
-
-      drawClock(ctx, snap);
-      this.drawFeed(ctx);
-
-      // map
-      const positions = {};
-      for (const c of FN.CHARS) {
-        const ac = snap.anims[c];
-        positions[c] = c === 'foxy' ? (ac.runT >= 0 ? '2A' : '1C') : ac.room;
-      }
-      let adj = [];
-      const canMove = this.who !== 'foxy' && a.cd <= 0 && room !== 'OF' && !snap.powerOut && !snap.jumpscare &&
-        !(this.who === 'freddy' && this.watched());
-      if (canMove) adj = FN.PLAYER_GRAPH[this.who][a.room] || [];
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(850, 300, 420, 410);
-      text(ctx, adj.length ? 'Click a green room to move' : 'Map', 1060, 318, 26, '#cfcfc8', 'center');
-      this.hits.push(...Art.drawMap(ctx, 860, 340, { mode: 'anim', here: positions[this.who], adj, positions, me: this.who, watched: watchedCams(snap), t }));
-
-      this.drawActions(ctx, snap, a, room);
-    }
-
-    actions(snap, a, room) {
-      const acts = [];
-      const lurk = T.doorLurkMin;
-      if (snap.powerOut || snap.jumpscare || room === 'OF') return acts;
-      const watched = this.watched();
-      if (this.who === 'bonnie' || this.who === 'chica') {
-        const side = this.who === 'bonnie' ? 'L' : 'R';
-        if (room === FN.DOOR_ROOM[side]) {
-          const shut = snap.doors[side];
-          const ready = a.doorT >= lurk;
-          acts.push({ id: 'enter', label: 'SNEAK IN', hot: ready && !shut, enabled: ready && !shut,
-            sub: shut ? `Door shut! Pushed back in ${Math.max(0, T.doorRepelTime - a.shutT).toFixed(1)}s` : ready ? 'The door is open...' : `Wait ${(lurk - a.doorT).toFixed(1)}s` });
-        }
-      } else if (this.who === 'freddy') {
-        if (room === '4B') {
-          acts.push({ id: 'enter', label: 'SNEAK IN', hot: true, enabled: a.cd <= 0 && !watched,
-            sub: watched ? 'They\'re watching you' : 'Only while the guard is on the monitor' });
-        }
-      } else if (this.who === 'foxy' && a.runT < 0) {
-        if (a.stage < 2) acts.push({ id: 'advance', label: 'CREEP OUT', enabled: a.cd <= 0 && !watched, sub: watched ? 'Hold still - watched' : a.cd > 0 ? `${a.cd.toFixed(1)}s` : `Stage ${a.stage + 1} of 3` });
-        else acts.push({ id: 'run', label: 'RUN!', hot: true, enabled: a.cd <= 0 && !watched, sub: watched ? 'Hold still - watched' : a.cd > 0 ? `${a.cd.toFixed(1)}s` : 'Sprint for the left door' });
-      } else if (this.who === 'foxy') {
-        acts.push({ id: 'none', label: 'RUNNING!', enabled: false, sub: 'Is the left door open?' });
-      }
-      const jamRoom = this.who === 'foxy' ? (a.runT >= 0 ? '2A' : '1C') : room;
-      if (FN.CAMS.includes(jamRoom) && jamRoom !== '6') {
-        acts.push({ id: 'jam', label: 'JAM CAMERA', enabled: a.jamCd <= 0, sub: a.jamCd > 0 ? `${a.jamCd.toFixed(0)}s` : `Static for ${T.jamDuration}s` });
-      }
-      return acts;
-    }
-
-    drawActions(ctx, snap, a, room) {
-      const acts = this.actions(snap, a, room);
-      let y = H - 100;
-      for (const b of acts.reverse()) {
-        button(ctx, this.hits, { ...b, x: 30, y, w: 300, h: 76 });
-        y -= 90;
-      }
-      if (room === 'OF') {
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(30, H - 130, 560, 100);
-        text(ctx, 'You\'re in the office.', 50, H - 104, 32, '#ff9a8a');
-        text(ctx, 'The moment they lower the monitor...', 50, H - 66, 28, '#cfcfc8');
-      }
-    }
-
-    drawFeed(ctx) {
-      const now = this.app.t;
-      const items = this.app.feed.filter((f) => now - f.at < 12).slice(-5);
-      let y = 136;
-      for (const f of items) {
-        ctx.globalAlpha = clamp(12 - (now - f.at), 0, 1);
-        text(ctx, f.msg, W - 30, y, 24, '#e0c8a0', 'right');
-        y += 28;
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    // Looking into the office from the doorway.
-    drawDoorPOV(ctx, side, t) {
-      const snap = this.app.snap;
-      const shut = snap.doors[side];
-      const lit = snap.lights[side];
-      const guards = Object.values(snap.guards);
-      const onMon = guards.some((g) => g.up);
-      const fx = 360, fy = 90, fw = 560, fh = 580;
-      ctx.fillStyle = '#060608';
-      ctx.fillRect(0, 0, W, H);
-      poly(ctx, [[0, 0], [fx, fy], [fx, fy + fh], [0, H]], '#1b1a1f');
-      poly(ctx, [[W, 0], [fx + fw, fy], [fx + fw, fy + fh], [W, H]], '#161519');
-      poly(ctx, [[0, H], [fx, fy + fh], [fx + fw, fy + fh], [W, H]], '#232226');
-      ctx.fillStyle = '#1e1f23';
-      ctx.fillRect(fx, fy, fw, fh);
-      ctx.fillStyle = '#2b2620';
-      ctx.fillRect(fx, fy + fh - 170, fw, 170);
-      const gx = side === 'L' ? fx + fw * 0.68 : fx + fw * 0.32;
-      if (guards.length) {
-        ell(ctx, gx, fy + fh - 250, 40, 46, '#050505');
-        ell(ctx, gx, fy + fh - 150, 100, 70, '#050505');
-        if (onMon) {
-          ctx.save();
-          ctx.shadowColor = '#9fe0c0';
-          ctx.shadowBlur = 40;
-          ctx.fillStyle = '#8fd0b0';
-          ctx.fillRect(gx - 70, fy + fh - 230, 140, 90);
-          ctx.restore();
-        }
-      }
-      ctx.fillStyle = '#3a332b';
-      ctx.fillRect(fx, fy + fh - 120, fw, 30);
-      if (shut) {
-        const g = ctx.createLinearGradient(fx, 0, fx + fw, 0);
-        g.addColorStop(0, '#3c3f44');
-        g.addColorStop(0.5, '#5b5e64');
-        g.addColorStop(1, '#3a3d42');
-        ctx.fillStyle = g;
-        ctx.fillRect(fx, fy, fw, fh);
-        for (let y = fy + 40; y < fy + fh; y += 42) { ctx.fillStyle = '#26282c'; ctx.fillRect(fx, y, fw, 5); }
-      }
-      ctx.strokeStyle = '#34363b';
-      ctx.lineWidth = 26;
-      ctx.strokeRect(fx - 13, fy - 13, fw + 26, fh + 26);
-      if (lit) {
-        const g = ctx.createRadialGradient(W / 2, 0, 40, W / 2, H / 2, 700);
-        g.addColorStop(0, 'rgba(255,235,170,0.35)');
-        g.addColorStop(1, 'rgba(255,235,170,0.05)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W, H);
-      } else {
-        ctx.fillStyle = 'rgba(0,0,0,0.45)';
-        ctx.fillRect(0, 0, W, H);
-      }
-      Art.staticScreen(ctx, t, 0.06);
-      const y0 = 300;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(W / 2 - 250, y0 - 30, 500, 120);
-      text(ctx, `DOOR: ${shut ? 'SHUT' : 'OPEN'}`, W / 2, y0, 34, shut ? '#ff8070' : '#90e070', 'center');
-      text(ctx, lit ? 'LIGHT ON - THEY CAN SEE YOU' : 'LIGHT: OFF', W / 2, y0 + 32, 28, lit ? '#ffd060' : '#a0a098', 'center');
-      text(ctx, onMon ? 'The guard is on the monitor' : 'The guard is watching the office', W / 2, y0 + 62, 26, '#cfcfc8', 'center');
-    }
-
-    drawInside(ctx, t) {
-      const snap = this.app.snap;
-      const v = {
-        t, door: { L: snap.doors.L ? 1 : 0, R: snap.doors.R ? 1 : 0 }, light: snap.lights,
-        doorway: { L: null, R: null }, invader: null, fan: t * 26, power: 'on', flash: false, dim: 0.3,
-      };
-      Art.blitOffice(ctx, Art.renderOffice(v), (OFF().W - W) / 2);
-    }
-
-    drawKitchen(ctx, t) {
-      ctx.fillStyle = '#060607';
-      ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = '#121214';
-      ctx.fillRect(100, 420, 1080, 300);
-      for (let i = 0; i < 7; i++) {
-        const x = 170 + i * 150;
-        ctx.strokeStyle = '#2a2a2e';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(x, 120);
-        ctx.lineTo(x, 200 + (i % 3) * 20);
-        ctx.stroke();
-        ell(ctx, x, 230 + (i % 3) * 20, 34, 30, '#1e1e22');
-      }
-      text(ctx, 'KITCHEN', W / 2, 360, 48, '#5a5a58', 'center');
-      text(ctx, 'No camera in here. The guard can only hear you.', W / 2, 404, 26, '#5a5a58', 'center');
-      Art.staticScreen(ctx, t, 0.08);
-    }
-
-    pointer(type, x, y) {
-      if (type !== 'up') return;
-      const h = hitTest(this.hits, x, y);
-      if (!h) return;
-      if (h.room) { this.app.send({ t: 'in', a: 'move', to: h.room }); A.play('click'); }
-      else if (h.id && h.id !== 'none') { this.app.send({ t: 'in', a: h.id }); A.play('click'); }
-    }
-
-    key(e) {
-      const k = e.key.toLowerCase();
-      const map = { e: 'enter', j: 'jam', ' ': this.who === 'foxy' ? (this.app.snap.anims.foxy.stage >= 2 ? 'run' : 'advance') : 'enter' };
-      if (map[k]) { this.app.send({ t: 'in', a: map[k] }); return true; }
-      return false;
-    }
-
-    onEvent(e) {
-      if (e.k === 'bang' && this.who === 'foxy') A.play('bang');
-      if (e.k === 'music') A.loop('music', true, 0.5);
-      if (e.k === 'musicstop') A.loop('music', false);
     }
   }
 
@@ -728,17 +513,16 @@
       }
       drawClock(ctx, snap);
       if (!snap.powerOut) drawPower(ctx, snap);
-      text(ctx, 'SPECTATING', 30, 70, 34, '#d8c25a');
-      let y = 104;
-      for (const [, g] of Object.entries(snap.guards)) {
-        text(ctx, `${g.name}: ${g.up ? `CAM ${g.cam}` : 'office'}`, 30, y, 24, '#b8d0b0');
-        y += 26;
-      }
+      text(ctx, 'SPECTATING', 30, 64, 34, '#d8c25a');
+      drawTeam(ctx, snap, null, 100);
+      drawCallouts(ctx, this.app.pings, this.app.t);
+      const y = 100 + 26 * (Object.keys(snap.guards).length + 1);
+      button(ctx, this.hits, { id: 'office', x: 30, y: y + 6, w: 180, h: 46, label: 'VIEW OFFICE', size: 26, enabled: this.cam !== 'OF' });
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(850, 300, 420, 410);
       text(ctx, this.cam === 'OF' ? 'The Office' : camName(this.cam), 1060, 318, 32, '#f2f2ec', 'center');
-      this.hits.push(...Art.drawMap(ctx, 860, 340, { mode: 'guard', cam: this.cam }));
-      button(ctx, this.hits, { id: 'office', x: 30, y: y + 10, w: 180, h: 50, label: 'VIEW OFFICE', size: 26, enabled: this.cam !== 'OF' });
+      const mm = mapMarks(snap, null, this.app.pings, this.app.t);
+      this.hits.push(...Art.drawMap(ctx, 860, 340, { cam: this.cam, marks: mm.marks, pings: mm.pings, t }));
     }
 
     pointer(type, x, y) {
@@ -760,5 +544,5 @@
     }
   }
 
-  FN.Views = { GuardView, AnimView, SpectatorView, Overlays, hitTest, button };
+  FN.Views = { GuardView, SpectatorView, Overlays, hitTest };
 })();

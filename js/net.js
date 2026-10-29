@@ -4,7 +4,7 @@
 // hosts and joiners.
 //
 // Protocol (all JSON):
-//   client -> host: hello {name, v}, role {role}, settings {settings}, start, lobby, in {...input}
+//   client -> host: hello {name, v}, role {role: guard|spectator}, settings {settings}, start, lobby, in {...input}
 //   host -> client: welcome {pid, code}, lobby {...}, start {}, snap {s, ev}, msg {text}, bye {reason}
 (function () {
   'use strict';
@@ -63,7 +63,7 @@
   }
 
   const DEFAULT_SETTINGS = {
-    night: 1, length: 'classic', speed: 'auto',
+    night: 1, length: 'classic',
     custom: { freddy: 10, bonnie: 10, chica: 10, foxy: 10 },
   };
 
@@ -136,14 +136,14 @@
             setTimeout(() => conn.close(), 300);
             return;
           }
-          if (this.players.length >= 12) {
+          if (this.players.length >= FN.MAX_PLAYERS) {
             conn.send({ t: 'bye', reason: 'The room is full.' });
             setTimeout(() => conn.close(), 300);
             return;
           }
           pid = 'p' + this.nextId++;
-          const role = this.phase === 'lobby' ? this.freeRole() : 'spectator';
-          this.players.push({ pid, name: cleanName(msg.name), role, conn });
+          const late = this.phase !== 'lobby';
+          this.players.push({ pid, name: cleanName(msg.name), role: late ? 'spectator' : this.freeRole(), conn, late });
           conn.send({ t: 'welcome', pid, code: this.code });
           if (this.phase !== 'lobby') conn.send({ t: 'start', late: true });
           this.broadcastLobby();
@@ -157,9 +157,13 @@
     }
 
     freeRole() {
-      for (const c of ['bonnie', 'chica', 'foxy', 'freddy']) if (!this.players.some((p) => p.role === c)) return c;
-      if (this.players.filter((p) => p.role === 'guard').length < FN.MAX_GUARDS) return 'guard';
-      return 'spectator';
+      return this.players.filter((p) => p.role === 'guard').length < FN.MAX_GUARDS ? 'guard' : 'spectator';
+    }
+
+    // Guards get a colour by seat order, used for call-outs and the team list.
+    colorOf(pid) {
+      const i = this.players.filter((p) => p.role === 'guard').findIndex((p) => p.pid === pid);
+      return i < 0 ? null : FN.GUARD_COLORS[i % FN.GUARD_COLORS.length];
     }
 
     removePlayer(pid) {
@@ -184,7 +188,6 @@
           const role = msg.role;
           if (role === 'guard' && p.role !== 'guard' &&
             this.players.filter((x) => x.role === 'guard').length >= FN.MAX_GUARDS) return;
-          if (FN.CHARS.includes(role) && this.players.some((x) => x.role === role && x.pid !== pid)) return;
           p.role = role;
           this.broadcastLobby();
           break;
@@ -208,7 +211,6 @@
       const n = Number(s.night);
       if (n >= 1 && n <= 7) cur.night = n;
       if (FN.LENGTHS[s.length]) cur.length = s.length;
-      if (FN.SPEEDS[s.speed]) cur.speed = s.speed;
       if (s.custom) for (const c of FN.CHARS) if (c in s.custom) cur.custom[c] = Math.max(0, Math.min(20, s.custom[c] | 0));
     }
 
@@ -216,7 +218,7 @@
       return {
         t: 'lobby', code: this.code, online: this.online, phase: this.phase, settings: this.settings,
         hostPid: this.localPid,
-        players: this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role })),
+        players: this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role, color: this.colorOf(p.pid) })),
       };
     }
 
@@ -229,7 +231,7 @@
         return;
       }
       this.phase = 'playing';
-      this.sim = new FN.Sim(this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role })), this.settings);
+      this.sim = new FN.Sim(this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role, color: this.colorOf(p.pid) })), this.settings);
       this.broadcastLobby();
       this.broadcast({ t: 'start' });
       this.last = performance.now();
@@ -249,10 +251,7 @@
       }
       const snap = this.sim.snapshot();
       const events = this.sim.takeEvents();
-      for (const p of this.players) {
-        const ev = events.filter((e) => this.eventFor(e, p));
-        this.sendTo(p.pid, { t: 'snap', s: snap, ev });
-      }
+      this.broadcast({ t: 'snap', s: snap, ev: events });
       if (this.sim.ended) {
         this.ticker.stop();
         this.ticker = null;
@@ -264,17 +263,14 @@
       }
     }
 
-    eventFor(e, p) {
-      if (e.to === 'all' || e.to === p.pid) return true;
-      if (e.to === 'guards') return p.role === 'guard' || p.role === 'spectator';
-      if (e.to === 'anims') return p.role !== 'guard';
-      return false;
-    }
-
     toLobby() {
       if (this.ticker) { this.ticker.stop(); this.ticker = null; }
       this.sim = null;
       this.phase = 'lobby';
+      // People who arrived mid-night were only watching for lack of a seat; give them one now.
+      for (const p of this.players) {
+        if (p.late) { p.late = false; p.role = this.freeRole(); }
+      }
       this.broadcastLobby();
     }
 
