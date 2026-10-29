@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Build assets</title>
+  <style>
+    @font-face { font-family: "VT323"; src: url("../assets/fonts/vt323.woff2") format("woff2"); }
+    @font-face { font-family: "Archivo Black"; src: url("../assets/fonts/archivo-black.woff2") format("woff2"); }
+    body { background: #111; color: #ccc; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <p>Run <code>node tools/build-assets.js</code> to regenerate assets/img from this page.</p>
+  <script src="../js/config.js"></script>
+  <script src="../js/layout.js"></script>
+  <script src="art/art-chars.js"></script>
+  <script src="art/art-scenes.js"></script>
+  <script src="art/export.js"></script>
+  <script>
+    // The baked text uses the bundled fonts, so wait for them before drawing anything.
+    window.fontsReady = Promise.all([
+      document.fonts.load('30px VT323'),
+      document.fonts.load('30px "Archivo Black"'),
+    ]);
+  </script>
+</body>
+</html>

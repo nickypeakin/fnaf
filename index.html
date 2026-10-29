@@ -3,16 +3,98 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Five Nights at Freddy's: Multiplayer</title>
+  <title>Five Nights at Freddy's: Co-op</title>
   <meta name="description" content="An unofficial co-op take on Five Nights at Freddy's. Share the office with your friends and survive the night together.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="frame">
-    <canvas id="game" width="1280" height="720"></canvas>
+  <!-- The game screen: plain images and page elements in a 1280x720 box scaled to fit the window.
+       No canvas or WebGL, so browser privacy tools that block those don't break the game. -->
+  <div id="viewport">
+    <div id="stage">
+      <div id="backdrop" class="layer">
+        <img id="bd-head" class="sprite" alt="">
+        <div id="bd-shade" class="fill"></div>
+        <div class="fill noise" id="bd-noise"></div>
+        <div id="bd-fade" class="fill"></div>
+      </div>
+
+      <div id="office" class="layer hidden">
+        <div id="office-world">
+          <img id="office-bg" alt="">
+          <div class="doorway" id="dw-L"><img class="dw-img" alt=""><img class="dw-shutter" alt=""></div>
+          <div class="doorway" id="dw-R"><img class="dw-img" alt=""><img class="dw-shutter" alt=""></div>
+          <div class="obtn door" id="btn-door-L"></div>
+          <div class="obtn light" id="btn-light-L"></div>
+          <div class="obtn door" id="btn-door-R"></div>
+          <div class="obtn light" id="btn-light-R"></div>
+          <div class="crt noise" id="scr-0"></div>
+          <div class="crt noise" id="scr-1"></div>
+          <img id="fan-blades" alt="">
+          <img id="fan-cage" alt="">
+          <img id="invader" class="sprite" alt="">
+          <div class="spill" id="spill-L"></div>
+          <div class="spill" id="spill-R"></div>
+          <div id="office-dim" class="fill"></div>
+          <div id="office-po" class="fill"></div>
+          <img id="po-freddy" alt="">
+        </div>
+      </div>
+
+      <div id="cams" class="layer hidden">
+        <div id="cam-world">
+          <img id="cam-bg" alt="">
+          <img class="sprite cam-char" id="cc-freddy" alt="">
+          <img class="sprite cam-char" id="cc-bonnie" alt="">
+          <img class="sprite cam-char" id="cc-chica" alt="">
+          <div id="cove-peek-clip"><img class="sprite" id="cove-peek" alt=""></div>
+          <img id="curtain-L" class="curtain" alt="">
+          <img id="curtain-R" class="curtain" alt="">
+          <img class="sprite" id="cove-out" alt="">
+          <img class="sprite" id="foxy-run" alt="">
+          <div id="cam-vignette"></div>
+        </div>
+        <div id="cam-disabled">-CAMERA DISABLED-<br><span>AUDIO ONLY</span></div>
+        <div id="cam-noise" class="fill noise"></div>
+        <div id="cam-bars" class="fill"></div>
+        <div id="cam-scan" class="fill"></div>
+        <div id="cam-roll"></div>
+        <div id="cam-vig2" class="fill"></div>
+        <div id="cam-frame"></div>
+        <div id="rec"><span></span>REC</div>
+        <div id="cam-name"></div>
+        <div id="map"></div>
+      </div>
+
+      <div id="tablet" class="hidden"><div class="noise" id="tablet-noise"></div></div>
+
+      <div id="hud" class="hidden">
+        <div id="clock"><div id="clock-hour">12 AM</div><div id="clock-night">Night 1</div></div>
+        <div id="spec-label" class="hidden">SPECTATING</div>
+        <div id="team"></div>
+        <div id="spec-office" class="hud-btn hidden">VIEW OFFICE</div>
+        <div id="callouts"></div>
+        <div id="arrow-L" class="ping-arrow"></div>
+        <div id="arrow-R" class="ping-arrow"></div>
+        <div id="btn-ping" class="hud-btn hidden">CALL OUT (F)</div>
+        <div id="power"><div>Power left: <span id="power-val">100</span>%</div><div>Usage: <span id="usage"></span></div></div>
+        <div id="mon-bar"><svg viewBox="0 0 80 30" aria-hidden="true"><path d="M14 18 L26 8 L38 18 M14 26 L26 16 L38 26 M42 18 L54 8 L66 18 M42 26 L54 16 L66 26"/></svg></div>
+      </div>
+
+      <div id="intro" class="layer hidden"><div id="intro-time">12:00 AM</div><div id="intro-night"></div><div id="intro-team"></div></div>
+      <div id="jumpscare" class="layer hidden"><img id="js-head" class="sprite" alt=""><div class="fill noise" id="js-noise"></div></div>
+      <div id="result" class="layer hidden">
+        <div class="fill noise" id="res-noise"></div>
+        <div id="res-clock"><div id="res-digits"><span id="res-5">5</span><span id="res-6">6</span></div><span id="res-am">AM</span></div>
+        <div id="res-pre"></div>
+        <div id="res-main"></div>
+        <div id="res-sub"></div>
+        <div id="res-gameover">Game Over</div>
+        <div id="res-btn" class="hud-btn hidden">Back to lobby</div>
+        <div id="res-wait" class="hidden">Waiting for the host...</div>
+      </div>
+      <div id="loading" class="layer hidden">Connecting to the night...</div>
+    </div>
   </div>
 
   <!-- Main menu -->
@@ -34,6 +116,7 @@
       </div>
       <button id="btn-help" class="btn small">How to play</button>
       <p id="menu-status" class="status" role="status"></p>
+      <p id="load-status" class="hint"></p>
       <p class="fine">Unofficial fan game. Not affiliated with Scott Cawthon or Five Nights at Freddy's.</p>
     </div>
 
@@ -122,8 +205,9 @@
   <script src="js/game.js"></script>
   <script src="js/net.js"></script>
   <script src="js/audio.js"></script>
-  <script src="js/art-chars.js"></script>
-  <script src="js/art-scenes.js"></script>
+  <script src="js/layout.js"></script>
+  <script src="js/assets-manifest.js"></script>
+  <script src="js/assets.js"></script>
   <script src="js/views.js"></script>
   <script src="js/main.js"></script>
 </body>

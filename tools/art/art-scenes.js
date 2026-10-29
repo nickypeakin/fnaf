@@ -1,11 +1,11 @@
-// Procedural scenes: the office panorama, every camera room, the camera map
-// and the CRT/static effects. Static backgrounds are rendered once at startup.
+// Draws the office, every camera room and the bits the game animates. Runs only in
+// tools/build-assets.html, which saves the results as the images in assets/.
 (function () {
   'use strict';
   const FN = window.FN;
   const Art = FN.Art;
   const { canvas, rng, rr, ell, poly, line, FONT } = Art;
-  const W = FN.W, H = FN.H;
+  const H = FN.H;
 
   // ================= shared helpers =================
   function checker(c, x, y, w, h, size, a, b) {
@@ -114,7 +114,7 @@
     Art.drawChar(c, 'chica', x + w * 0.78, y + h * 1.18, s * 1.05, { light: 0.85 });
     Art.drawChar(c, 'freddy', x + w * 0.5, y + h * 1.12, s * 1.15, { light: 0.9 });
     c.restore();
-    c.font = `bold ${Math.round(w * 0.15)}px "Arial Black", Impact, sans-serif`;
+    c.font = `bold ${Math.round(w * 0.15)}px "Archivo Black", "Arial Black", Impact, sans-serif`;
     c.textAlign = 'center';
     c.textBaseline = 'top';
     c.fillStyle = '#e8c43a';
@@ -125,14 +125,8 @@
   }
 
   // ================= office =================
-  const OW = 1600;
-  const DOOR = { L: { x0: 82, x1: 272 }, R: { x0: 1328, x1: 1518 }, top: 128, bot: 600 };
-  const PANEL = { L: 318, R: 1282 };
-  const BTN = { door: 356, light: 428, r: 21 };
-  const POSTER = { x: 420, y: 150, w: 200, h: 250 };
-  // Freddy's nose on the poster (it honks).
-  const NOSE = { x: POSTER.x + POSTER.w * 0.5, y: POSTER.y + POSTER.h * 1.12 + (-478 + 4) * (POSTER.w / 600) * 1.15, r: 9 };
-  Art.OFFICE = { W: OW, DOOR, PANEL, BTN, NOSE };
+  const { DOOR, PANEL, BTN, POSTER } = FN.LAYOUT.OFFICE;
+  const OW = FN.LAYOUT.OFFICE.W;
 
   function buildOffice() {
     const cv = canvas(OW, H);
@@ -354,27 +348,22 @@
     c.fillRect(d.x0, DOOR.top, w, y1 - DOOR.top);
   }
 
-  function glowBtn(c, x, y, col, on) {
-    c.save();
-    if (on) { c.shadowColor = col; c.shadowBlur = 34; }
-    ell(c, x, y, BTN.r, BTN.r, col);
-    c.restore();
-    ell(c, x - 6, y - 7, 6, 4, on ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.12)');
-  }
 
-  function fan(c, ang) {
-    c.save();
-    c.translate(1011, 400);
+  // The fan is split so the game can spin the blades under a still cage.
+  function fanBlades(c) {
     ell(c, 0, 0, 60, 60, 'rgba(48,50,54,0.55)');
     for (let k = 0; k < 3; k++) {
       for (let i = 0; i < 3; i++) {
         c.save();
-        c.rotate(ang - k * 0.18 + (i * Math.PI * 2) / 3);
+        c.rotate(-k * 0.18 + (i * Math.PI * 2) / 3);
         ell(c, 0, -30, 17, 30, `rgba(80,82,88,${0.5 - k * 0.15})`);
         c.restore();
       }
     }
     ell(c, 0, 0, 10, 10, '#1b1c1f');
+  }
+
+  function fanCage(c) {
     c.strokeStyle = '#3e4045';
     c.lineWidth = 4;
     c.beginPath();
@@ -385,97 +374,12 @@
       const a = (i * Math.PI) / 6;
       line(c, Math.cos(a) * 12, Math.sin(a) * 12, Math.cos(a) * 62, Math.sin(a) * 62);
     }
-    c.restore();
   }
 
-  let officeBg = null;
-  let officeFrame = null;
-
-  // v: {t, door:{L,R} 0..1, light:{L,R}, doorway:{L,R}, invader, fan, power:'on'|'out'|'music'|'dark', flash, dim}
-  Art.renderOffice = function (v) {
-    const c = officeFrame.getContext('2d');
-    c.setTransform(1, 0, 0, 1, 0, 0);
-    c.globalCompositeOperation = 'source-over';
-    c.fillStyle = '#000';
-    c.fillRect(0, 0, OW, H);
-    const powered = v.power === 'on';
-    for (const s of ['L', 'R']) doorwayInterior(c, s, powered && v.light[s], v.doorway[s]);
-    c.drawImage(officeBg, 0, 0);
-    for (const s of ['L', 'R']) shutter(c, s, v.door[s]);
-    for (const s of ['L', 'R']) {
-      glowBtn(c, PANEL[s], BTN.door, powered && v.door[s] > 0.5 ? '#ff2d1e' : '#4a120d', powered && v.door[s] > 0.5);
-      glowBtn(c, PANEL[s], BTN.light, powered && v.light[s] ? '#fffdf2' : '#36373c', powered && v.light[s]);
-    }
-    if (powered) {
-      const n = Art.noiseTex[Math.floor(v.t * 20) % Art.noiseTex.length];
-      c.globalAlpha = 0.22;
-      c.drawImage(n, 716, 360, 178, 118);
-      c.drawImage(n, 608, 408, 104, 76);
-      c.globalAlpha = 1;
-      c.fillStyle = 'rgba(70,140,100,0.10)';
-      c.fillRect(716, 360, 178, 118);
-    }
-    fan(c, v.fan);
-    if (v.invader) {
-      const ix = v.invader.side === 'L' ? 430 : 1170;
-      Art.drawChar(c, v.invader.who, ix, 830, 1.3, { eyes: 'dark', light: 0.55 });
-    }
-    if (powered) {
-      for (const s of ['L', 'R']) {
-        if (!v.light[s]) continue;
-        const d = DOOR[s];
-        c.save();
-        c.globalCompositeOperation = 'lighter';
-        const g = c.createRadialGradient((d.x0 + d.x1) / 2, 360, 20, (d.x0 + d.x1) / 2, 360, 380);
-        g.addColorStop(0, 'rgba(255,225,160,0.12)');
-        g.addColorStop(1, 'rgba(0,0,0,0)');
-        c.fillStyle = g;
-        c.fillRect(0, 0, OW, H);
-        c.restore();
-      }
-      if (v.dim > 0) { c.fillStyle = `rgba(0,0,0,${v.dim})`; c.fillRect(0, 0, OW, H); }
-    } else if (v.power === 'dark') {
-      c.fillStyle = '#000';
-      c.fillRect(0, 0, OW, H);
-    } else {
-      c.fillStyle = 'rgba(2,3,12,0.88)';
-      c.fillRect(0, 0, OW, H);
-      if (v.power === 'music') {
-        const d = DOOR.L;
-        c.save();
-        c.beginPath();
-        c.rect(d.x0, DOOR.top, d.x1 - d.x0, DOOR.bot - DOOR.top);
-        c.clip();
-        Art.drawChar(c, 'freddy', (d.x0 + d.x1) / 2, DOOR.bot + 80, 0.92, { eyes: 'glow', light: v.flash ? 0.5 : 0.1 });
-        c.restore();
-        if (v.flash) {
-          for (const [ex, ey] of Art.eyePos('freddy', (d.x0 + d.x1) / 2, DOOR.bot + 80, 0.92)) Art.glint(c, ex, ey, 4, '#9fe0ff');
-        }
-      }
-    }
-    return officeFrame;
-  };
-
-  // The office is a wide panorama; bulge the edges a little like the original's lens.
-  const WARP = 0.085;
-  Art.warpScale = (sx) => { const nx = (sx - W / 2) / (W / 2); return 1 + WARP * nx * nx; };
-  Art.blitOffice = function (ctx, frame, scroll) {
-    const strip = 8;
-    for (let x = 0; x < W; x += strip) {
-      const f = Art.warpScale(x + strip / 2);
-      const h = H * f;
-      ctx.drawImage(frame, scroll + x, 0, strip, H, x, (H - h) / 2, strip + 0.5, h);
-    }
-  };
-  // Screen point -> office world point.
-  Art.officePoint = function (sx, sy, scroll) {
-    const f = Art.warpScale(sx);
-    return [scroll + sx, H / 2 + (sy - H / 2) / f];
-  };
 
   // ================= camera rooms =================
-  const RW = 1480;
-  Art.ROOM_W = RW;
+  const RW = FN.LAYOUT.ROOM_W;
+
 
   const ROOM_DRAW = {
     '1A'(c) {
@@ -572,12 +476,12 @@
       c.fillRect(1290, 520, 8, 150);
       c.fillStyle = '#c8c0a8';
       c.fillRect(1130, 440, 200, 104);
-      c.font = 'bold 28px "Arial Black", Impact, sans-serif';
+      c.font = 'bold 28px "Archivo Black", "Arial Black", Impact, sans-serif';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.fillStyle = '#7a1d18';
       c.fillText('SORRY!', 1230, 468);
-      c.font = 'bold 20px "Arial Black", Impact, sans-serif';
+      c.font = 'bold 20px "Archivo Black", "Arial Black", Impact, sans-serif';
       c.fillStyle = '#222';
       c.fillText('OUT OF ORDER', 1230, 510);
     },
@@ -734,23 +638,7 @@
   }
 
   // feet x, feet y, scale, eye style, brightness
-  const SPOTS = {
-    '1A': { freddy: [740, 615, 0.7, 'normal', 0.85], bonnie: [500, 618, 0.66, 'normal', 0.8], chica: [990, 618, 0.66, 'normal', 0.8] },
-    '1B': { bonnie: [300, 650, 0.6, 'normal', 0.6], chica: [1180, 650, 0.6, 'normal', 0.6], freddy: [760, 470, 0.32, 'glow', 0.3] },
-    '2A': { bonnie: [740, 590, 0.42, 'dark', 0.5] },
-    '2B': { bonnie: [880, 1030, 1.45, 'empty', 0.45] },
-    '3': { bonnie: [760, 780, 0.95, 'dark', 0.45] },
-    '4A': { chica: [640, 615, 0.46, 'normal', 0.6], freddy: [860, 605, 0.44, 'glow', 0.4] },
-    '4B': { chica: [900, 1030, 1.4, 'dark', 0.45], freddy: [430, 1000, 1.25, 'glow', 0.35] },
-    '5': { bonnie: [880, 930, 1.2, 'dark', 0.45] },
-    '7': { chica: [700, 670, 0.64, 'normal', 0.6], freddy: [960, 680, 0.62, 'glow', 0.4] },
-  };
-  const ROOM_LIGHT = {
-    '1A': [740, 330, 0.55], '1B': [740, 380, 0.7], '1C': [740, 360, 0.65], '2A': [740, 380, 0.72], '2B': [880, 380, 0.65],
-    '3': [760, 400, 0.7], '4A': [740, 380, 0.72], '4B': [600, 380, 0.65], '5': [760, 380, 0.7], '7': [800, 380, 0.7],
-  };
 
-  let curtainTex = null;
   function buildCurtain() {
     const cv = canvas(320, 440);
     const c = cv.getContext('2d');
@@ -769,186 +657,6 @@
     return cv;
   }
 
-  function drawCove(c, foxy) {
-    const stage = foxy.runT >= 0 ? 3 : foxy.stage;
-    const gapByStage = [0, 70, 380, 420];
-    const gap = gapByStage[stage];
-    if (stage === 1) {
-      c.save();
-      c.beginPath();
-      c.rect(430, 120, 620, 440);
-      c.clip();
-      Art.drawChar(c, 'foxy', 760, 760, 0.62, { eyes: 'normal', light: 0.5 });
-      c.restore();
-    }
-    const half = (620 - gap) / 2;
-    c.drawImage(curtainTex, 430, 120, half, 440);
-    c.drawImage(curtainTex, 1050 - half, 120, half, 440);
-    if (stage === 2) Art.drawChar(c, 'foxy', 740, 650, 0.68, { eyes: 'normal', light: 0.7 });
-  }
 
-  // Draw what a camera in `room` sees. `pan` is the horizontal pan (0..1).
-  Art.drawRoom = function (ctx, room, snap, pan, t) {
-    if (room === '6') {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H);
-      text(ctx, '-CAMERA DISABLED-', W / 2 - 200, 200, 48, '#e8e8e8', 'center');
-      text(ctx, 'AUDIO ONLY', W / 2 - 200, 250, 36, '#e8e8e8', 'center');
-      return;
-    }
-    const off = -pan * (RW - W);
-    ctx.save();
-    ctx.translate(off, 0);
-    ctx.drawImage(roomBg[room], 0, 0);
-    const spots = SPOTS[room] || {};
-    const here = snap ? FN.CHARS.filter((c) => snap.anims[c].room === room) : [];
-    for (const who of ['freddy', 'bonnie', 'chica']) {
-      if (!here.includes(who) || !spots[who]) continue;
-      const [x, y, s, eyes, light] = spots[who];
-      Art.drawChar(ctx, who, x, y, s, { eyes, light });
-      if (eyes === 'glow' || eyes === 'dark') {
-        for (const [ex, ey] of Art.eyePos(who, x, y, s)) Art.glint(ctx, ex, ey + 2 * s, Math.max(1.5, 4 * s), eyes === 'glow' ? '#ffffff' : '#dddddd');
-      }
-    }
-    if (room === '1C' && snap) drawCove(ctx, snap.anims.foxy);
-    if (room === '2A' && snap && snap.anims.foxy.runT >= 0) {
-      const k = Math.min(1, snap.anims.foxy.runT / FN.TUNE.foxyRunTime);
-      const s = 0.3 + k * k * 1.4;
-      Art.drawChar(ctx, 'foxy', 740 + Math.sin(t * 30) * 8, 520 + k * k * 560, s, { pose: 'run', eyes: 'normal', light: 0.75 });
-    }
-    const [lx, ly, dark] = ROOM_LIGHT[room] || [740, 360, 0.6];
-    vignette(ctx, lx, ly, 120, 900, RW, H, dark + 0.25);
-    ctx.restore();
-  };
-
-  // ================= CRT effects =================
-  Art.noiseTex = [];
-  let scanPattern = null;
-  function buildNoise() {
-    for (let k = 0; k < 6; k++) {
-      const cv = canvas(320, 180);
-      const c = cv.getContext('2d');
-      const img = c.createImageData(320, 180);
-      for (let i = 0; i < img.data.length; i += 4) {
-        const v = Math.random() * 255;
-        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-        img.data[i + 3] = 255;
-      }
-      c.putImageData(img, 0, 0);
-      Art.noiseTex.push(cv);
-    }
-    const sc = canvas(4, 4);
-    const c = sc.getContext('2d');
-    c.fillStyle = 'rgba(0,0,0,0.35)';
-    c.fillRect(0, 0, 4, 1);
-    c.fillStyle = 'rgba(0,0,0,0.15)';
-    c.fillRect(0, 2, 4, 1);
-    scanPattern = sc;
-  }
-
-  // Static, scanlines, rolling bar and vignette over a camera feed. glitch 0..1 = signal loss.
-  Art.camEffects = function (ctx, t, glitch, tint) {
-    const n = Art.noiseTex[Math.floor(t * 24) % Art.noiseTex.length];
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = 0.1 + Math.random() * 0.06 + glitch * 0.85;
-    ctx.drawImage(n, 0, 0, W, H);
-    ctx.restore();
-    if (glitch > 0.3) {
-      for (let i = 0; i < 6; i++) {
-        ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.25})`;
-        ctx.fillRect(0, Math.random() * H, W, 4 + Math.random() * 30);
-      }
-    }
-    if (tint) { ctx.fillStyle = tint; ctx.fillRect(0, 0, W, H); }
-    ctx.fillStyle = ctx.createPattern(scanPattern, 'repeat');
-    ctx.fillRect(0, 0, W, H);
-    const by = ((t * 90) % (H + 200)) - 100;
-    const g = ctx.createLinearGradient(0, by - 60, 0, by + 60);
-    g.addColorStop(0, 'rgba(255,255,255,0)');
-    g.addColorStop(0.5, 'rgba(255,255,255,0.04)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, by - 60, W, 120);
-    vignette(ctx, W / 2, H / 2, 300, 820, W, H, 0.6);
-  };
-
-  Art.staticScreen = function (ctx, t, alpha = 1) {
-    const n = Art.noiseTex[Math.floor(t * 30) % Art.noiseTex.length];
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(n, 0, 0, W, H);
-    ctx.restore();
-  };
-
-  // ================= map =================
-  const MAP = {
-    rooms: {
-      '1A': [148, 6, 124, 46], '1B': [100, 60, 220, 118], '1C': [50, 112, 44, 56], '5': [6, 58, 60, 48],
-      '7': [330, 60, 62, 92], '6': [320, 190, 72, 72], '2A': [128, 186, 44, 128], '3': [62, 246, 60, 44],
-      '2B': [128, 314, 44, 40], '4A': [248, 186, 44, 128], '4B': [248, 314, 44, 40], OF: [184, 306, 52, 48],
-      LD: [172, 316, 12, 32], RD: [236, 316, 12, 32],
-    },
-    cams: {
-      '1A': [184, 12], '1B': [140, 120], '1C': [36, 168], '5': [6, 108], '7': [350, 106], '6': [342, 232],
-      '2A': [118, 230], '3': [52, 296], '2B': [118, 334], '4A': [262, 230], '4B': [262, 334],
-    },
-    w: 400, h: 360,
-  };
-  Art.MAP = MAP;
-
-  // The camera map. o: {cam: selected, marks: {cam: [teammate colours]}, pings: [{cam, color}], t}
-  Art.drawMap = function (ctx, ox, oy, o) {
-    const hits = [];
-    ctx.save();
-    ctx.translate(ox, oy);
-    ctx.lineWidth = 3;
-    for (const [id, [x, y, w, h]] of Object.entries(MAP.rooms)) {
-      const door = id === 'LD' || id === 'RD';
-      ctx.fillStyle = door ? 'rgba(90,90,90,0.5)' : 'rgba(20,20,22,0.55)';
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = door ? '#888' : '#d8d8d8';
-      ctx.strokeRect(x, y, w, h);
-    }
-    const [ox2, oy2, ow, oh] = MAP.rooms.OF;
-    text(ctx, 'YOU', ox2 + ow / 2, oy2 + oh / 2, 20, '#fff', 'center');
-    const flash = Math.sin((o.t || 0) * 12) > 0;
-    for (const [cam, [bx, by]] of Object.entries(MAP.cams)) {
-      const sel = cam === o.cam;
-      const ping = (o.pings || []).find((p) => p.cam === cam);
-      ctx.fillStyle = sel ? '#5a9e3a' : '#5a5a5a';
-      ctx.fillRect(bx, by, 50, 32);
-      ctx.strokeStyle = ping && flash ? ping.color : sel ? '#b8f090' : '#c8c8c8';
-      ctx.lineWidth = ping ? 4 : 2;
-      ctx.strokeRect(bx - (ping ? 3 : 0), by - (ping ? 3 : 0), 50 + (ping ? 6 : 0), 32 + (ping ? 6 : 0));
-      text(ctx, 'CAM', bx + 25, by + 9, 14, '#fff', 'center');
-      text(ctx, cam, bx + 25, by + 23, 18, '#fff', 'center');
-      const marks = (o.marks && o.marks[cam]) || [];
-      marks.forEach((col, k) => {
-        ell(ctx, bx + 50 - 6 - k * 11, by + 6, 5, 5, col);
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = '#000';
-        ctx.stroke();
-      });
-      hits.push({ cam, x: ox + bx, y: oy + by, w: 50, h: 32 });
-    }
-    ctx.restore();
-    return hits;
-  };
-
-  // ================= init =================
-  const roomBg = {};
-  Art.init = function () {
-    if (officeBg) return;
-    buildNoise();
-    officeBg = buildOffice();
-    officeFrame = canvas(OW, H);
-    curtainTex = buildCurtain();
-    for (const room of Object.keys(ROOM_DRAW)) {
-      const cv = canvas(RW, H);
-      ROOM_DRAW[room](cv.getContext('2d'));
-      roomBg[room] = cv;
-    }
-  };
+  Art.scenes = { buildOffice, doorwayInterior, shutter, fanBlades, fanCage, ROOM_DRAW, buildCurtain, vignette, text };
 })();

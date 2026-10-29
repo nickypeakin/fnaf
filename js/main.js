@@ -2,9 +2,10 @@
 (function () {
   'use strict';
   const FN = window.FN;
-  const Art = FN.Art;
   const A = FN.Audio;
   const V = FN.Views;
+  const U = V.util;
+  const L = FN.LAYOUT;
   const W = FN.W, H = FN.H;
   const $ = (id) => document.getElementById(id);
 
@@ -128,6 +129,7 @@
     if (l) { try { l.close(); } catch (e) { /* already closed */ } }
     Object.assign(App, { host: null, isHost: false, pid: null, lobby: null, snap: null, view: null, js: null, resultAt: null });
     A.stopAll();
+    V.Overlays.clear();
     showScreen('menu');
     if (reason) { setStatus('menu-status', reason, true); toast(reason, true); }
   }
@@ -138,6 +140,8 @@
     const role = late || !me ? 'spectator' : me.role;
     A.stopAll();
     Object.assign(App, { snap: null, js: null, resultAt: null, pings: [], role });
+    V.Overlays.clear();
+    V.resetCamChrome();
     App.view = role === 'guard' ? new V.GuardView(App) : new V.SpectatorView(App);
     showScreen('game');
     if (late) toast('A night is already underway. You\'re spectating until the next one.');
@@ -145,6 +149,7 @@
 
   function backToLobby() {
     A.stopAll();
+    V.Overlays.clear();
     Object.assign(App, { view: null, snap: null, js: null, resultAt: null });
     showScreen('lobby');
   }
@@ -292,58 +297,60 @@
   }
 
   // ---------------- render loop ----------------
-  const cv = $('game');
-  const ctx = cv.getContext('2d');
+  const stage = $('stage');
+  const viewport = $('viewport');
   let last = performance.now();
+  let fit = { s: 1, x: 0, y: 0 };
   let menuEyes = { dark: false, until: 0 };
 
+  // Scale the 1280x720 stage to fit the window, letterboxed.
+  function fitStage() {
+    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    fit = { s, x: (window.innerWidth - W * s) / 2, y: (window.innerHeight - H * s) / 2 };
+    stage.style.transform = `translate(${fit.x}px, ${fit.y}px) scale(${s})`;
+  }
+
+  // Title screen: Freddy staring out of the static, eyes flickering.
   function drawBackdrop(t) {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H);
     if (t > menuEyes.until) menuEyes = { dark: Math.random() < 0.18, until: t + (Math.random() < 0.2 ? 0.12 : 0.6 + Math.random() * 2) };
-    const flicker = Math.random() < 0.06 ? 0.4 : 1;
-    Art.drawHeadCloseup(ctx, 'freddy', 900 + Math.sin(t * 0.4) * 10, 430, 1.7, 0, menuEyes.dark ? 'dark' : 'normal', Math.sin(t * 0.3) * 0.03);
-    ctx.fillStyle = `rgba(0,0,0,${flicker < 1 ? 0.9 : 0.62})`;
-    ctx.fillRect(0, 0, W, H);
-    Art.staticScreen(ctx, t, 0.12 + Math.random() * 0.06);
-    const g = ctx.createLinearGradient(0, 0, W * 0.6, 0);
-    g.addColorStop(0, 'rgba(0,0,0,0.7)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
+    const head = $('bd-head');
+    U.img(head, L.headName('freddy', 'shut', menuEyes.dark ? 'dark' : 'normal'));
+    const k = 1.7 / L.HEAD.scale;
+    U.set(head, 'transform', `translate(${(900 + Math.sin(t * 0.4) * 10 - L.HEAD.cx).toFixed(1)}px, ${430 - L.HEAD.cy}px) scale(${k}) rotate(${(Math.sin(t * 0.3) * 0.03).toFixed(3)}rad)`);
+    U.set($('bd-shade'), 'opacity', Math.random() < 0.06 ? '0.9' : '0.62');
+    U.set($('bd-noise'), 'opacity', (0.12 + Math.random() * 0.06).toFixed(2));
   }
 
   function drawGame(dt) {
     const snap = App.snap;
     const t = App.t;
-    if (App.js && t - App.js.at < FN.TUNE.jumpscareTime + 0.1) {
-      V.Overlays.jumpscare(ctx, App.js.who, t - App.js.at, t);
-      return;
-    }
+    const scare = App.js && t - App.js.at < FN.TUNE.jumpscareTime + 0.1;
+    U.vis($('jumpscare'), !!scare);
+    if (scare) { V.Overlays.jumpscare(App.js.who, t - App.js.at, t); return; }
     if (snap.result) {
       if (App.resultAt == null) App.resultAt = t;
       const k = t - App.resultAt;
       A.loop('heavystatic', snap.result.winner === 'anims' && k < 2.2, 0.5);
       App.resultHits = [];
-      V.Overlays.result(ctx, snap.result, k, t, App, App.resultHits);
+      V.Overlays.result(snap.result, k, App, App.resultHits);
       return;
     }
+    U.vis($('result'), false);
     App.view.update(dt);
-    App.view.draw(ctx, t);
-    V.Overlays.intro(ctx, snap, t);
+    App.view.draw(t);
+    V.Overlays.intro(snap);
   }
 
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     App.t = now / 1000;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
     try {
-      if (App.screen === 'game' && App.view) {
+      const inGame = App.screen === 'game' && App.view;
+      U.vis($('backdrop'), !inGame);
+      if (inGame) {
+        U.vis($('loading'), !App.snap);
         if (App.snap) drawGame(dt);
-        else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); Art.text(ctx, 'Connecting to the night...', W / 2, H / 2, 36, '#888', 'center'); }
       } else drawBackdrop(App.t);
     } catch (e) {
       console.error(e);
@@ -353,8 +360,7 @@
 
   // ---------------- input ----------------
   function toGame(e) {
-    const r = cv.getBoundingClientRect();
-    return [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height];
+    return [(e.clientX - fit.x) / fit.s, (e.clientY - fit.y) / fit.s];
   }
 
   function dispatch(type, e) {
@@ -371,11 +377,11 @@
     App.view.pointer(type, x, y, e);
   }
 
-  cv.addEventListener('pointerdown', (e) => { A.init(); dispatch('down', e); });
-  cv.addEventListener('pointermove', (e) => dispatch('move', e));
-  cv.addEventListener('pointerup', (e) => dispatch('up', e));
-  cv.addEventListener('pointerleave', (e) => dispatch('leave', e));
-  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  viewport.addEventListener('pointerdown', (e) => { A.init(); dispatch('down', e); });
+  viewport.addEventListener('pointermove', (e) => dispatch('move', e));
+  viewport.addEventListener('pointerup', (e) => dispatch('up', e));
+  viewport.addEventListener('pointerleave', (e) => dispatch('leave', e));
+  viewport.addEventListener('contextmenu', (e) => e.preventDefault());
 
   window.addEventListener('keydown', (e) => {
     A.init();
@@ -437,12 +443,11 @@
     if (App.isHost && App.lobby && App.lobby.online && App.lobby.players.length > 1) { e.preventDefault(); e.returnValue = ''; }
   });
 
-  // Wait briefly for the pixel font so pre-rendered text uses it.
-  const fontReady = document.fonts && document.fonts.load
-    ? Promise.race([document.fonts.load('30px VT323'), new Promise((r) => setTimeout(r, 2000))]).catch(() => {})
-    : Promise.resolve();
-  fontReady.then(() => {
-    Art.init();
-    requestAnimationFrame(frame);
+  V.Scene.init();
+  fitStage();
+  window.addEventListener('resize', fitStage);
+  FN.Assets.onProgress((done, total) => {
+    $('load-status').textContent = done < total ? `Loading the pizzeria... ${Math.round((100 * done) / total)}%` : '';
   });
+  requestAnimationFrame(frame);
 })();

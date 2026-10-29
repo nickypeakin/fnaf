@@ -1,3 +1,5 @@
+@font-face { font-family: "VT323"; src: url("../assets/fonts/vt323.woff2") format("woff2"); font-display: swap; }
+
 :root {
   --bg: #000;
   --ink: #e8e8e2;
@@ -23,22 +25,155 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-#frame {
+/* ---------- game stage: a 1280x720 box of images, scaled to fit the window ---------- */
+#viewport {
   position: fixed;
   inset: 0;
-  display: grid;
-  place-items: center;
   background: #000;
-}
-
-#game {
-  width: min(100vw, 177.78vh);
-  height: min(56.25vw, 100vh);
-  display: block;
+  overflow: hidden;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
 }
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  transform-origin: 0 0;
+  background: #000;
+}
+#stage * { pointer-events: none; }
+#stage img { display: block; position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; }
+.layer { position: absolute; inset: 0; overflow: hidden; }
+.fill { position: absolute; inset: 0; }
+.sprite { left: 0; top: 0; width: 600px; height: 820px; transform-origin: 0 0; }
+.noise {
+  background: url("../assets/img/noise.webp") 0 0 / 100% 600%;
+  image-rendering: pixelated;
+  animation: noise 0.25s steps(6) infinite;
+}
+@keyframes noise { to { background-position: 0 120%; } }
+
+/* office */
+#office-world { position: absolute; left: 0; top: 0; width: 1600px; height: 720px; }
+#office-bg { left: 0; top: 0; width: 1600px; height: 720px; }
+.doorway { position: absolute; top: 128px; width: 190px; height: 472px; overflow: hidden; background: #000; }
+#dw-L { left: 82px; }
+#dw-R { left: 1328px; }
+.doorway img { left: 0; top: 0; width: 190px; height: 472px; }
+.dw-shutter { transform: translateY(-472px); }
+.obtn { position: absolute; width: 42px; height: 42px; margin: -21px 0 0 -21px; border-radius: 50%; }
+.obtn::after { content: ""; position: absolute; left: 9px; top: 10px; width: 12px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.12); }
+.obtn.door { background: #4a120d; }
+.obtn.light { background: #36373c; }
+.obtn.door.on { background: #ff2d1e; box-shadow: 0 0 30px 6px rgba(255, 45, 30, 0.8); }
+.obtn.light.on { background: #fffdf2; box-shadow: 0 0 30px 6px rgba(255, 253, 242, 0.8); }
+.obtn.on::after { background: rgba(255, 255, 255, 0.7); }
+#btn-door-L, #btn-light-L { left: 318px; }
+#btn-door-R, #btn-light-R { left: 1282px; }
+#btn-door-L, #btn-door-R { top: 356px; }
+#btn-light-L, #btn-light-R { top: 428px; }
+.crt { position: absolute; opacity: 0.22; }
+.crt::after { content: ""; position: absolute; inset: 0; background: rgba(70, 140, 100, 0.5); }
+#scr-0 { left: 716px; top: 360px; width: 178px; height: 118px; }
+#scr-1 { left: 608px; top: 408px; width: 104px; height: 76px; }
+#fan-blades, #fan-cage { left: 941px; top: 330px; width: 140px; height: 140px; }
+.spill { position: absolute; inset: 0; opacity: 0; }
+#spill-L { background: radial-gradient(circle 380px at 177px 360px, rgba(255, 225, 160, 0.16), rgba(255, 225, 160, 0)); }
+#spill-R { background: radial-gradient(circle 380px at 1423px 360px, rgba(255, 225, 160, 0.16), rgba(255, 225, 160, 0)); }
+#office-dim { background: #000; opacity: 0; }
+#office-po { background: rgba(2, 3, 12, 0.88); display: none; }
+#po-freddy { left: 82px; top: 128px; width: 190px; height: 472px; display: none; }
+
+/* cameras */
+#cam-world { position: absolute; left: 0; top: 0; width: 1480px; height: 720px; }
+#cam-bg { left: 0; top: 0; width: 1480px; height: 720px; }
+#cam-vignette { position: absolute; inset: 0; }
+#cove-peek-clip { position: absolute; left: 430px; top: 120px; width: 620px; height: 440px; overflow: hidden; }
+.curtain { top: 120px; height: 440px; }
+#cam-disabled { position: absolute; left: 0; width: 880px; top: 172px; text-align: center; font-size: 48px; color: #e8e8e8; line-height: 1.05; }
+#cam-disabled span { font-size: 36px; }
+#cam-bars div { position: absolute; left: 0; width: 100%; background: #fff; }
+#cam-scan { background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.35) 0 1px, transparent 1px 2px, rgba(0, 0, 0, 0.15) 2px 3px, transparent 3px 4px); }
+#cam-roll { position: absolute; left: 0; top: 0; width: 1280px; height: 120px; background: linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)); animation: roll 10s linear infinite; }
+@keyframes roll { from { transform: translateY(-160px); } to { transform: translateY(820px); } }
+#cam-vig2 { background: radial-gradient(circle at 640px 360px, rgba(0, 0, 0, 0) 300px, rgba(0, 0, 0, 0.6) 820px); }
+#cam-frame { position: absolute; left: 24px; top: 24px; width: 1232px; height: 672px; border: 3px solid rgba(255, 255, 255, 0.6); }
+#rec { position: absolute; left: 39px; top: 36px; font-size: 30px; color: #f0f0e8; display: flex; align-items: center; gap: 10px; }
+#rec span { width: 26px; height: 26px; border-radius: 50%; background: #d01a10; animation: blink 1.33s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+#cam-name { position: absolute; left: 860px; width: 400px; top: 298px; text-align: center; font-size: 36px; color: #f2f2ec; }
+#map { position: absolute; left: 860px; top: 340px; width: 400px; height: 360px; }
+.mroom { position: absolute; border: 3px solid #d8d8d8; background: rgba(20, 20, 22, 0.55); }
+.mroom.door { border-color: #888; background: rgba(90, 90, 90, 0.5); }
+.mroom.office { display: grid; place-items: center; font-size: 20px; color: #fff; }
+.mcam { position: absolute; width: 50px; height: 32px; background: #5a5a5a; border: 2px solid #c8c8c8; color: #fff; text-align: center; line-height: 1; }
+.mcam b { display: block; font-weight: normal; font-size: 14px; margin-top: 1px; }
+.mcam i { display: block; font-style: normal; font-size: 18px; }
+.mcam.sel { background: #5a9e3a; border-color: #b8f090; }
+.mcam.ping { outline: 4px solid var(--ping, #fff); outline-offset: 1px; animation: blink 0.5s steps(2) infinite; }
+.mcam .marks { position: absolute; right: 1px; top: 1px; display: flex; flex-direction: row-reverse; gap: 1px; }
+.mcam .marks span { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #000; }
+#tablet { position: absolute; left: 30px; top: 0; width: 1220px; height: 720px; background: #1a1b1e; border-radius: 26px; }
+#tablet-noise { position: absolute; left: 30px; top: 30px; right: 30px; bottom: 30px; border-radius: 12px; background-color: #060807; opacity: 0.5; }
+
+/* HUD */
+#hud { position: absolute; inset: 0; color: #f2f2ec; text-shadow: 0 0 4px #000, 0 0 2px #000; }
+#clock { position: absolute; right: 30px; top: 8px; text-align: right; }
+#clock-hour { font-size: 66px; line-height: 1; }
+#clock-night { font-size: 30px; color: #cfcfc8; }
+#spec-label { position: absolute; left: 30px; top: 44px; font-size: 34px; color: #d8c25a; }
+#team { position: absolute; left: 30px; top: 48px; font-size: 24px; line-height: 25px; }
+#team .t-head { color: #8d8d86; }
+#team .t-me { color: #f2f2ec; }
+#team .t-mate { color: #c8d8c0; }
+#team .t-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; }
+#callouts { position: absolute; left: 0; right: 0; top: 128px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#callouts div { background: rgba(0, 0, 0, 0.75); border: 2px solid currentColor; padding: 2px 20px; font-size: 34px; }
+.ping-arrow { position: absolute; top: 326px; width: 0; height: 0; border-top: 34px solid transparent; border-bottom: 34px solid transparent; display: none; }
+#arrow-L { left: 18px; border-right: 36px solid currentColor; }
+#arrow-R { right: 18px; border-left: 36px solid currentColor; }
+.hud-btn { position: absolute; background: rgba(28, 28, 32, 0.85); border: 2px solid #cfcfc8; color: #fff; display: grid; place-items: center; font-size: 26px; text-shadow: none; }
+#btn-ping { left: 30px; top: 564px; width: 190px; height: 42px; }
+#spec-office { left: 30px; width: 180px; height: 46px; }
+#power { position: absolute; left: 30px; top: 624px; font-size: 32px; line-height: 38px; }
+#usage span { display: inline-block; width: 20px; height: 28px; margin-right: 6px; vertical-align: -5px; }
+#mon-bar { position: absolute; left: 250px; top: 668px; width: 660px; height: 40px; background: rgba(255, 255, 255, 0.18); border: 2px solid rgba(255, 255, 255, 0.7); }
+#mon-bar.up { background: rgba(255, 255, 255, 0.12); }
+#mon-bar svg { position: absolute; left: 290px; top: 2px; width: 80px; height: 32px; fill: none; stroke: #fff; stroke-width: 3; }
+#mon-bar.up svg { transform: scaleY(-1); }
+
+/* overlays */
+#intro { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; }
+#intro-time { font-size: 72px; }
+#intro-night { font-size: 44px; }
+#intro-team { font-size: 28px; color: #a0a098; margin-top: 30px; min-height: 1em; }
+#jumpscare { background: #000; }
+#js-head { width: 1000px; height: 1000px; transform-origin: 500px 520px; }
+#js-noise { opacity: 0.12; }
+#result { background: #000; color: #f2f2ec; }
+#res-clock { position: absolute; left: 480px; top: 240px; display: flex; align-items: center; font-size: 140px; line-height: 1; }
+#res-digits { position: relative; width: 140px; height: 150px; overflow: hidden; }
+#res-digits span { position: absolute; left: 0; width: 140px; top: 10px; text-align: center; }
+#res-am { margin-left: 20px; }
+#res-pre, #res-main, #res-sub { position: absolute; left: 0; width: 1280px; text-align: center; }
+#res-pre { top: 278px; font-size: 34px; color: #a0a098; }
+#res-main { top: 330px; font-size: 46px; color: #e04a3a; }
+#res-sub { top: 384px; font-size: 32px; color: #cfcfc8; }
+#result.win #res-main { top: 428px; font-size: 40px; color: #d8c25a; }
+#res-gameover { position: absolute; right: 60px; bottom: 30px; font-size: 64px; }
+#res-btn { left: 480px; top: 530px; width: 320px; height: 64px; font-size: 32px; }
+#res-wait { position: absolute; left: 0; width: 1280px; top: 545px; text-align: center; font-size: 30px; color: #8d8d86; }
+#loading { display: grid; place-items: center; font-size: 36px; color: #888; background: #000; }
+
+/* title screen */
+#bd-head { width: 1000px; height: 1000px; transform-origin: 500px 520px; }
+#bd-shade { background: #000; opacity: 0.62; }
+#bd-noise { opacity: 0.14; }
+#bd-fade { background: linear-gradient(to right, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0) 60%); }
 
 .hidden { display: none !important; }
 

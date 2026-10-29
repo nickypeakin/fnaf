@@ -10,10 +10,23 @@
   let muted = false;
   try { muted = localStorage.getItem('fnaf-muted') === '1'; } catch (e) { /* storage blocked */ }
 
+  let failed = false;
   function init() {
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    if (failed) return;
+    if (ctx) { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    try {
+      setup(AC);
+    } catch (e) {
+      // Some privacy tools block or break Web Audio; the game just runs silently then.
+      console.warn('sound unavailable:', e);
+      failed = true;
+      ctx = null;
+    }
+  }
+
+  function setup(AC) {
     ctx = new AC();
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -10;

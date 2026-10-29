@@ -1,4 +1,5 @@
-// Procedural animatronic art. Figures are drawn once per (character, pose,
+// Procedural animatronic art, used by tools/build-assets.html to draw the character
+// images in assets/. Figures are drawn once per (character, pose,
 // eyes, brightness) into a cached sprite, shaded so they read as 3D in the dark.
 (function () {
   'use strict';
@@ -107,7 +108,7 @@
     }
     if (who === 'chica') {
       poly(c, [[-74, -362], [74, -362], [64, -232], [-64, -232]], '#f2eee2');
-      c.font = 'bold 34px "Arial Black", Impact, sans-serif';
+      c.font = 'bold 34px "Archivo Black", "Arial Black", Impact, sans-serif';
       c.textAlign = 'left';
       c.textBaseline = 'middle';
       const cols = ['#7a3fb0', '#d0332e', '#2f9a3a', '#e0791e', '#2f68c8', '#c22a8a'];
@@ -299,7 +300,7 @@
   }
 
   // ---------- sprite cache ----------
-  const SPR = { w: 600, h: 820, ox: 300, oy: 800, s: 0.8 };
+  const SPR = { ...FN.LAYOUT.SPRITE, s: 1 };
   const cache = new Map();
 
   function shadeLayer(c, cv, light) {
@@ -327,7 +328,6 @@
   }
 
   Art.sprite = function (who, pose = 'stand', eyeStyle = 'normal', light = 1) {
-    light = Math.round(light * 10) / 10;
     const key = `${who}|${pose}|${eyeStyle}|${light}`;
     let sp = cache.get(key);
     if (sp) return sp;
@@ -340,6 +340,11 @@
     shadeLayer(c, cv, light);
     eyes(c, who, PAL[who], eyeStyle, HEAD_Y, 1 - light);
     lids(c, who, PAL[who], HEAD_Y, Math.min(0.9, 0.3 + (1 - light)));
+    // Dark and glowing eyes get a glint so they catch the eye in a dim camera feed.
+    if (eyeStyle === 'glow' || eyeStyle === 'dark') {
+      const ex = who === 'chica' ? 38 : 34;
+      for (const x of [-ex, ex]) Art.glint(c, x, HEAD_Y - 16, 4, eyeStyle === 'glow' ? '#ffffff' : '#dddddd');
+    }
     sp = { cv };
     cache.set(key, sp);
     return sp;
@@ -370,10 +375,11 @@
   // ---------- jumpscare / close-up head ----------
   let jsCanvas = null;
   Art.drawHeadCloseup = function (ctx, who, cx, cy, scale, jaw, eyeStyle, rot = 0) {
-    if (!jsCanvas) jsCanvas = Art.canvas(FN.W, FN.H);
+    const tw = ctx.canvas.width, th = ctx.canvas.height;
+    if (!jsCanvas || jsCanvas.width !== tw || jsCanvas.height !== th) jsCanvas = Art.canvas(tw, th);
     const c = jsCanvas.getContext('2d');
     c.setTransform(1, 0, 0, 1, 0, 0);
-    c.clearRect(0, 0, FN.W, FN.H);
+    c.clearRect(0, 0, tw, th);
     c.translate(cx, cy);
     c.rotate(rot);
     c.scale(scale, scale);

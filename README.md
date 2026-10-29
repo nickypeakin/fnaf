@@ -68,15 +68,27 @@ then open http://localhost:8000.
 
 Gameplay numbers (power drain, team difficulty bonus, Foxy's run time and so on) live in `FN.TUNE` in `js/config.js`. The AI difficulty per night is in `FN.NIGHT_AI` in the same file.
 
+The game screen is built from ordinary images and page elements, with no `<canvas>` or WebGL, so browser privacy and anti-fingerprinting tools that block those don't break it. Fonts are bundled too, so nothing loads from Google.
+
 | File | What it does |
 | --- | --- |
 | `js/config.js` | Rooms, paths, night difficulty, tuning numbers |
+| `js/layout.js` | Where everything sits on screen (shared with the image builder) |
 | `js/game.js` | The night simulation (runs on the host) |
 | `js/net.js` | Rooms, joining, and syncing over PeerJS |
 | `js/views.js` | What guards and spectators see |
-| `js/art-chars.js`, `js/art-scenes.js` | All the art, drawn in code |
 | `js/audio.js` | All the sound, synthesized in code |
 | `js/main.js` | Menus, lobby, input, render loop |
+| `assets/img/` | The pre-drawn images (office, cameras, animatronics) |
+| `tools/` | The code that draws those images |
+
+### Redrawing the images
+The art is drawn in code (`tools/art/`), then saved as images so players' browsers never have to draw anything. After changing the art or `js/layout.js`, regenerate the images with:
+
+```bash
+npm i -D playwright && npx playwright install chromium
+node tools/build-assets.js
+```
 
 ### Using your own matchmaking server (optional)
 Players find each other through the free public [PeerJS](https://peerjs.com/) server. If it's ever down, you can run your own ([peerjs-server](https://github.com/peers/peerjs-server)) and point the game at it with URL parameters:
@@ -84,4 +96,4 @@ Players find each other through the free public [PeerJS](https://peerjs.com/) se
 
 ## Credits
 
-Unofficial, non-commercial fan game. Not affiliated with Scott Cawthon or the Five Nights at Freddy's franchise. Every image and sound here is generated in code, and no original game assets are used. The power-out music box plays Bizet's *Toreador Song* (public domain). Networking uses [PeerJS](https://peerjs.com/) (MIT license, see `vendor/PEERJS-LICENSE`).
+Unofficial, non-commercial fan game. Not affiliated with Scott Cawthon or the Five Nights at Freddy's franchise. Every image and sound here is generated in code, and no original game assets are used. Fonts: VT323 and Archivo Black (SIL Open Font License, see `assets/fonts/`). The power-out music box plays Bizet's *Toreador Song* (public domain). Networking uses [PeerJS](https://peerjs.com/) (MIT license, see `vendor/PEERJS-LICENSE`).

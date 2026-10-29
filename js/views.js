@@ -1,21 +1,43 @@
 // In-game views. Every player is a night guard (GuardView) sharing one office;
 // anyone past the guard limit, or who joins mid-night, gets the SpectatorView.
-// Views render from the latest host snapshot and send inputs through app.send().
+// Views read the latest host snapshot and update the page elements in #stage
+// (plain images and divs, no canvas), and send inputs through app.send().
 (function () {
   'use strict';
   const FN = window.FN;
-  const Art = FN.Art;
   const A = FN.Audio;
+  const L = FN.LAYOUT;
   const W = FN.W, H = FN.H, T = FN.TUNE;
-  const { text, ell, rr, poly } = Art;
-  const OFF = () => Art.OFFICE;
+  const { OFFICE, SPRITE, MAP } = L;
 
   const hourLabel = (h) => (h === 0 ? '12 AM' : `${Math.min(6, h)} AM`);
   const nightLabel = (n) => (n === 7 ? 'Custom Night' : `Night ${n}`);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const camName = (room) => (FN.ROOMS[room] ? FN.ROOMS[room].name : room);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const LOOK_TEXT = { L: 'left door', C: 'the desk', R: 'right door' };
   const PING_TEXT = { L: 'LEFT DOOR!', C: 'HEADS UP!', R: 'RIGHT DOOR!' };
+  const OFFICE_MAX = OFFICE.W - W;
+
+  // ---------- cheap DOM updates: only touch the page when a value actually changes ----------
+  const $ = (id) => document.getElementById(id);
+  const memo = (el) => el._m || (el._m = {});
+  function set(el, prop, val) { const m = memo(el); if (m[prop] !== val) { m[prop] = val; el.style[prop] = val; } }
+  function vis(el, on) { const m = memo(el); if (m.vis !== on) { m.vis = on; el.classList.toggle('hidden', !on); } }
+  function cls(el, name, on) { const m = memo(el); if (m['c' + name] !== on) { m['c' + name] = on; el.classList.toggle(name, on); } }
+  function text(el, s) { const m = memo(el); if (m.text !== s) { m.text = s; el.textContent = s; } }
+  function html(el, s) { const m = memo(el); if (m.html !== s) { m.html = s; el.innerHTML = s; } }
+  // Show image `name` (or hide the element when name is null).
+  function img(el, name) {
+    const m = memo(el);
+    if (name && m.src !== name) { m.src = name; el.src = FN.Assets.url(name); }
+    set(el, 'display', name ? 'block' : 'none');
+  }
+  // Place a character image with its feet at (x, y).
+  function sprite(el, name, x, y, scale) {
+    img(el, name);
+    if (name) set(el, 'transform', `translate(${(x - SPRITE.ox * scale).toFixed(1)}px, ${(y - SPRITE.oy * scale).toFixed(1)}px) scale(${scale.toFixed(3)})`);
+  }
 
   function hitTest(hits, x, y) {
     for (let i = hits.length - 1; i >= 0; i--) {
@@ -25,141 +47,274 @@
     return null;
   }
 
-  function button(ctx, hits, b) {
-    ctx.fillStyle = b.enabled ? 'rgba(28,28,32,0.85)' : 'rgba(16,16,18,0.7)';
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = b.enabled ? '#cfcfc8' : '#3e3e42';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(b.x, b.y, b.w, b.h);
-    text(ctx, b.label, b.x + b.w / 2, b.y + b.h / 2, b.size || 32, b.enabled ? '#fff' : '#6a6a6a', 'center');
-    if (b.enabled) hits.push({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h });
+  // ---------- the scene: office, cameras, map and HUD elements ----------
+  let E = null;
+  const Scene = {
+    init() {
+      if (E) return;
+      const side = (f) => ({ L: f('L'), R: f('R') });
+      E = {
+        office: $('office'), officeWorld: $('office-world'), officeBg: $('office-bg'),
+        dwImg: side((s) => $('dw-' + s).querySelector('.dw-img')),
+        dwShutter: side((s) => $('dw-' + s).querySelector('.dw-shutter')),
+        btnDoor: side((s) => $('btn-door-' + s)), btnLight: side((s) => $('btn-light-' + s)),
+        spill: side((s) => $('spill-' + s)), screens: [$('scr-0'), $('scr-1')],
+        fanBlades: $('fan-blades'), fanCage: $('fan-cage'), invader: $('invader'),
+        dim: $('office-dim'), po: $('office-po'), poFreddy: $('po-freddy'),
+        cams: $('cams'), camWorld: $('cam-world'), camBg: $('cam-bg'), camDisabled: $('cam-disabled'),
+        cc: { freddy: $('cc-freddy'), bonnie: $('cc-bonnie'), chica: $('cc-chica') },
+        covePeekClip: $('cove-peek-clip'), covePeek: $('cove-peek'), coveOut: $('cove-out'),
+        curtain: side((s) => $('curtain-' + s)), foxyRun: $('foxy-run'),
+        camVignette: $('cam-vignette'), camNoise: $('cam-noise'), camBars: $('cam-bars'), camName: $('cam-name'), map: $('map'),
+        tablet: $('tablet'), hud: $('hud'), clockHour: $('clock-hour'), clockNight: $('clock-night'),
+        team: $('team'), specLabel: $('spec-label'), specOffice: $('spec-office'), callouts: $('callouts'),
+        arrow: side((s) => $('arrow-' + s)), btnPing: $('btn-ping'), power: $('power'), powerVal: $('power-val'),
+        usage: $('usage'), monBar: $('mon-bar'),
+      };
+      img(E.officeBg, 'office');
+      img(E.fanBlades, 'fan-blades');
+      img(E.fanCage, 'fan-cage');
+      for (const s of ['L', 'R']) { img(E.dwShutter[s], 'shutter'); img(E.curtain[s], 'curtain'); }
+      for (let i = 0; i < 6; i++) E.camBars.appendChild(document.createElement('div'));
+      // Map: rooms, then camera buttons on top.
+      let h = '';
+      for (const [id, [x, y, w, hh]] of Object.entries(MAP.rooms)) {
+        const kind = id === 'LD' || id === 'RD' ? ' door' : id === 'OF' ? ' office' : '';
+        h += `<div class="mroom${kind}" style="left:${x}px;top:${y}px;width:${w}px;height:${hh}px">${id === 'OF' ? 'YOU' : ''}</div>`;
+      }
+      for (const [cam, [x, y]] of Object.entries(MAP.cams)) {
+        h += `<div class="mcam" data-cam="${cam}" style="left:${x}px;top:${y}px"><b>CAM</b><i>${cam}</i><div class="marks"></div></div>`;
+      }
+      E.map.innerHTML = h;
+      E.mcam = {};
+      for (const el of E.map.querySelectorAll('.mcam')) E.mcam[el.dataset.cam] = { el, marks: el.querySelector('.marks') };
+    },
+
+    // withMap keeps the camera layer (and its map) visible over the office, for spectators.
+    show(which, withMap) {
+      vis(E.office, which === 'office');
+      vis(E.cams, which === 'cams' || !!withMap);
+    },
+
+    // v: {scroll, door:{L,R} 0..1, light:{L,R}, doorway:{L,R}, invader, fan, power:'on'|'out'|'music'|'dark', flash, dim}
+    office(v) {
+      set(E.officeWorld, 'transform', `translateX(${-Math.round(v.scroll)}px)`);
+      const powered = v.power === 'on';
+      for (const s of ['L', 'R']) {
+        const lit = powered && v.light[s];
+        const who = v.doorway[s];
+        const known = (s === 'L' && who === 'bonnie') || (s === 'R' && who === 'chica');
+        img(E.dwImg[s], lit ? `door-${s}-${known ? who : 'lit'}` : null);
+        set(E.dwShutter[s], 'transform', `translateY(${Math.round((v.door[s] - 1) * (OFFICE.DOOR.bot - OFFICE.DOOR.top))}px)`);
+        cls(E.btnDoor[s], 'on', powered && v.door[s] > 0.5);
+        cls(E.btnLight[s], 'on', lit);
+        set(E.spill[s], 'opacity', lit ? '1' : '0');
+      }
+      for (const el of E.screens) set(el, 'display', powered ? 'block' : 'none');
+      set(E.fanBlades, 'transform', `rotate(${(v.fan % (Math.PI * 2)).toFixed(2)}rad)`);
+      if (v.invader) {
+        const [x, y, s] = OFFICE.INVADER[v.invader.side];
+        sprite(E.invader, L.spriteName(v.invader.who, 'stand', ...L.INVADER_LOOK), x, y, s);
+      } else img(E.invader, null);
+      set(E.dim, 'opacity', v.power === 'dark' ? '1' : powered ? String(v.dim) : '0');
+      set(E.po, 'display', !powered && v.power !== 'dark' ? 'block' : 'none');
+      img(E.poFreddy, v.power === 'music' ? (v.flash ? 'door-L-freddy-on' : 'door-L-freddy-off') : null);
+    },
+
+    // What a camera in `room` sees.
+    cams(room, snap, pan, glitch, t, title, mapOpts) {
+      set(E.camWorld, 'transform', `translateX(${-Math.round(pan * (L.ROOM_W - W))}px)`);
+      const disabled = room === '6';
+      set(E.camWorld, 'display', disabled ? 'none' : 'block');
+      set(E.camDisabled, 'display', disabled ? 'block' : 'none');
+      if (!disabled) img(E.camBg, 'room-' + room);
+      const spots = L.SPOTS[room] || {};
+      for (const who of ['freddy', 'bonnie', 'chica']) {
+        const spot = spots[who];
+        if (spot && snap.anims[who].room === room) sprite(E.cc[who], L.spriteName(who, 'stand', spot[3], spot[4]), spot[0], spot[1], spot[2]);
+        else img(E.cc[who], null);
+      }
+      const foxy = snap.anims.foxy;
+      const cove = room === '1C';
+      const stage = foxy.runT >= 0 ? 3 : foxy.stage;
+      set(E.covePeekClip, 'display', cove && stage === 1 ? 'block' : 'none');
+      if (cove && stage === 1) {
+        const [who, x, y, s, eyes, light] = L.COVE.peek;
+        sprite(E.covePeek, L.spriteName(who, 'stand', eyes, light), x - L.COVE.rect[0], y - L.COVE.rect[1], s);
+      }
+      if (cove && stage === 2) {
+        const [who, x, y, s, eyes, light] = L.COVE.out;
+        sprite(E.coveOut, L.spriteName(who, 'stand', eyes, light), x, y, s);
+      } else img(E.coveOut, null);
+      const [cx, , cw] = L.COVE.rect;
+      const half = (cw - L.COVE.gaps[stage]) / 2;
+      for (const s of ['L', 'R']) {
+        set(E.curtain[s], 'display', cove ? 'block' : 'none');
+        set(E.curtain[s], 'width', `${half}px`);
+        set(E.curtain[s], 'left', `${s === 'L' ? cx : cx + cw - half}px`);
+      }
+      if (room === '2A' && foxy.runT >= 0) {
+        const k = Math.min(1, foxy.runT / T.foxyRunTime);
+        const [who, pose, eyes, light] = L.FOXY_RUN;
+        sprite(E.foxyRun, L.spriteName(who, pose, eyes, light), 740 + Math.sin(t * 30) * 8, 520 + k * k * 560, 0.3 + k * k * 1.4);
+      } else img(E.foxyRun, null);
+      const [lx, ly, dark] = L.ROOM_LIGHT[room] || [740, 360, 0.6];
+      set(E.camVignette, 'background', `radial-gradient(circle at ${lx}px ${ly}px, rgba(0,0,0,0) 120px, rgba(0,0,0,${dark + 0.25}) 900px)`);
+      set(E.camNoise, 'opacity', (0.1 + Math.random() * 0.06 + glitch * 0.85).toFixed(2));
+      const bars = glitch > 0.3;
+      set(E.camBars, 'display', bars ? 'block' : 'none');
+      if (bars) {
+        for (const b of E.camBars.children) {
+          b.style.top = `${Math.random() * H}px`;
+          b.style.height = `${4 + Math.random() * 30}px`;
+          b.style.opacity = (Math.random() * 0.25).toFixed(2);
+        }
+      }
+      text(E.camName, title);
+      this.map(mapOpts);
+    },
+
+    // The camera map: selected camera, teammates' cameras and live call-outs.
+    map(o) {
+      for (const [cam, m] of Object.entries(E.mcam)) {
+        cls(m.el, 'sel', cam === o.cam);
+        const ping = o.pings.find((p) => p.cam === cam);
+        cls(m.el, 'ping', !!ping);
+        if (ping) set(m.el, 'outlineColor', ping.color || '#fff');
+        html(m.marks, (o.marks[cam] || []).map((c) => `<span style="background:${c}"></span>`).join(''));
+      }
+    },
+
+    tablet(k) {
+      vis(E.tablet, k > 0 && k < 1);
+      if (k > 0 && k < 1) set(E.tablet, 'transform', `translateY(${Math.round(H - H * 1.05 * k)}px)`);
+    },
+
+    hud(o) {
+      vis(E.hud, true);
+      const snap = o.snap;
+      text(E.clockHour, hourLabel(snap.hour));
+      text(E.clockNight, nightLabel(snap.night));
+      set(E.power, 'display', o.power ? 'block' : 'none');
+      text(E.powerVal, String(Math.max(0, Math.ceil(snap.power))));
+      const cols = ['#4caf3c', '#4caf3c', '#d8c23a', '#e08a2a', '#d23a2a'];
+      html(E.usage, cols.slice(0, Math.min(5, snap.usage)).map((c) => `<span style="background:${c}"></span>`).join(''));
+      set(E.monBar, 'display', o.bar ? 'block' : 'none');
+      cls(E.monBar, 'up', !!o.mon);
+      vis(E.btnPing, !!o.ping);
+      vis(E.specLabel, !!o.spectating);
+      // Team list
+      const guards = Object.entries(snap.guards);
+      let team = '';
+      if (o.spectating || guards.length > 1) {
+        team = '<div class="t-head">TEAM</div>' + guards.map(([pid, g]) => {
+          const what = g.up ? `CAM ${g.cam}  ${camName(g.cam)}` : LOOK_TEXT[g.look] || 'the office';
+          const me = pid === o.myPid;
+          return `<div class="${me ? 't-me' : 't-mate'}"><span class="t-dot" style="background:${g.color || '#ccc'}"></span>${esc(g.name)}${me ? ' (you)' : ''}: ${esc(what)}</div>`;
+        }).join('');
+      }
+      html(E.team, team);
+      set(E.team, 'top', `${o.teamTop}px`);
+      set(E.team, 'display', o.showTeam === false ? 'none' : 'block');
+      // Call-outs fade out over their last second.
+      const now = o.now;
+      const live = o.pings.filter((p) => now - p.at < T.pingTime).slice(-3);
+      html(E.callouts, live.map((p) => {
+        const a = clamp(T.pingTime - (now - p.at), 0, 1).toFixed(2);
+        const msg = `${p.name.toUpperCase()}: ${p.cam ? `CHECK CAM ${p.cam}!` : PING_TEXT[p.side] || 'HEADS UP!'}`;
+        return `<div style="color:${p.color || '#fff'};opacity:${a}">${esc(msg)}</div>`;
+      }).join(''));
+      for (const s of ['L', 'R']) {
+        const p = o.arrows ? live.filter((q) => !q.cam && q.side === s).pop() : null;
+        set(E.arrow[s], 'display', p && Math.sin(o.t * 10) > 0 ? 'block' : 'none');
+        if (p) set(E.arrow[s], 'color', p.color || '#fff');
+      }
+    },
+
+    hideHud() { vis(E.hud, false); },
+  };
+
+  // Map camera buttons as hit boxes in stage coordinates.
+  function camHits() {
+    return Object.entries(MAP.cams).map(([cam, [x, y]]) => ({ cam, x: MAP.x + x, y: MAP.y + y, w: 50, h: 32 }));
   }
 
-  function drawClock(ctx, snap) {
-    text(ctx, hourLabel(snap.hour), W - 30, 48, 66, '#f2f2ec', 'right');
-    text(ctx, nightLabel(snap.night), W - 30, 94, 30, '#cfcfc8', 'right');
-  }
-
-  function drawPower(ctx, snap) {
-    text(ctx, `Power left: ${Math.max(0, Math.ceil(snap.power))}%`, 30, H - 76, 32, '#f2f2ec');
-    text(ctx, 'Usage:', 30, H - 38, 32, '#f2f2ec');
-    const cols = ['#4caf3c', '#4caf3c', '#d8c23a', '#e08a2a', '#d23a2a'];
-    for (let i = 0; i < Math.min(5, snap.usage); i++) {
-      ctx.fillStyle = cols[i];
-      ctx.fillRect(122 + i * 26, H - 52, 20, 28);
-    }
-  }
-
-  // The team list: who's on which camera, who's watching which door.
-  function drawTeam(ctx, snap, myPid, y0) {
-    const guards = Object.entries(snap.guards);
-    if (guards.length < 2 && myPid) return;
-    let y = y0;
-    text(ctx, 'TEAM', 30, y, 24, '#8d8d86');
-    y += 26;
-    for (const [pid, g] of guards) {
-      ell(ctx, 38, y, 7, 7, g.color || '#ccc');
-      const what = g.up ? `CAM ${g.cam}  ${camName(g.cam)}` : LOOK_TEXT[g.look] || 'the office';
-      text(ctx, `${g.name}${pid === myPid ? ' (you)' : ''}: ${what}`, 52, y, 24, pid === myPid ? '#f2f2ec' : '#c8d8c0');
-      y += 25;
-    }
-  }
-
-  // Monitor markers for the map: which cameras teammates are on, and live call-outs.
   function mapMarks(snap, myPid, pings, now) {
     const marks = {};
     for (const [pid, g] of Object.entries(snap.guards)) {
       if (!g.up || pid === myPid) continue;
       (marks[g.cam] = marks[g.cam] || []).push(g.color || '#ccc');
     }
-    const live = pings.filter((p) => p.cam && now - p.at < T.pingTime).map((p) => ({ cam: p.cam, color: p.color }));
-    return { marks, pings: live };
+    return { marks, pings: pings.filter((p) => p.cam && now - p.at < T.pingTime) };
   }
 
-  function drawCallouts(ctx, pings, now) {
-    const live = pings.filter((p) => now - p.at < T.pingTime).slice(-3);
-    let y = 150;
-    for (const p of live) {
-      const a = clamp(T.pingTime - (now - p.at), 0, 1);
-      ctx.globalAlpha = a;
-      const msg = `${p.name.toUpperCase()}: ${p.cam ? `CHECK CAM ${p.cam}!` : PING_TEXT[p.side] || 'HEADS UP!'}`;
-      ctx.font = `34px ${Art.FONT}`;
-      const w = ctx.measureText(msg).width + 40;
-      ctx.fillStyle = 'rgba(0,0,0,0.75)';
-      ctx.fillRect(W / 2 - w / 2, y - 22, w, 44);
-      ctx.strokeStyle = p.color || '#fff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(W / 2 - w / 2, y - 22, w, 44);
-      text(ctx, msg, W / 2, y, 34, p.color || '#fff', 'center');
-      ctx.globalAlpha = 1;
-      y += 52;
-    }
-  }
-
-  // ---------- shared overlays ----------
+  // ---------- full-screen overlays ----------
   const Overlays = {
-    intro(ctx, snap) {
-      if (snap.t > 4) return;
-      const a = snap.t < 3 ? 1 : 1 - (snap.t - 3);
-      ctx.fillStyle = `rgba(0,0,0,${a})`;
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalAlpha = a;
-      text(ctx, '12:00 AM', W / 2, H / 2 - 30, 72, '#fff', 'center');
+    intro(snap) {
+      const el = $('intro');
+      const on = snap.t <= 4;
+      vis(el, on);
+      if (!on) return;
+      set(el, 'opacity', String(snap.t < 3 ? 1 : clamp(1 - (snap.t - 3), 0, 1)));
       const ord = ['1st', '2nd', '3rd', '4th', '5th', '6th'][snap.night - 1];
-      text(ctx, snap.night === 7 ? 'Custom Night' : `${ord} Night`, W / 2, H / 2 + 36, 44, '#fff', 'center');
+      text($('intro-night'), snap.night === 7 ? 'Custom Night' : `${ord} Night`);
       const n = Object.keys(snap.guards).length;
-      if (n > 1) text(ctx, `${n} guards on shift. The animatronics are restless tonight (+${snap.bonus} AI).`, W / 2, H / 2 + 96, 28, '#a0a098', 'center');
-      ctx.globalAlpha = 1;
+      text($('intro-team'), n > 1 ? `${n} guards on shift. The animatronics are restless tonight (+${snap.bonus} AI).` : '');
     },
 
-    jumpscare(ctx, who, k, t) {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H);
+    jumpscare(who, k, t) {
+      vis($('jumpscare'), true);
+      const head = $('js-head');
+      const eyes = who === 'freddy' ? 'glow' : 'dark';
+      img(head, L.headName(who, Math.abs(Math.sin(t * 30)) > 0.75 ? 'b' : 'a', eyes));
       const shake = 26 * (1 - Math.min(1, k / 1.4)) + 8;
-      const scale = 1.4 + Math.min(1, k * 5) * 1.6;
-      const jaw = 0.5 + 0.5 * Math.abs(Math.sin(t * 30));
-      Art.drawHeadCloseup(ctx, who, W / 2 + (Math.random() - 0.5) * shake, H * 0.58 + (Math.random() - 0.5) * shake,
-        scale, jaw, who === 'freddy' ? 'glow' : 'dark', (Math.random() - 0.5) * 0.1);
-      Art.staticScreen(ctx, t, 0.12);
+      const scale = (1.4 + Math.min(1, k * 5) * 1.6) / L.HEAD.scale;
+      const dx = W / 2 - L.HEAD.cx + (Math.random() - 0.5) * shake;
+      const dy = H * 0.58 - L.HEAD.cy + (Math.random() - 0.5) * shake;
+      set(head, 'transform', `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${scale.toFixed(3)}) rotate(${((Math.random() - 0.5) * 0.1).toFixed(3)}rad)`);
     },
 
-    result(ctx, res, k, t, app, hits) {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H);
+    result(res, k, app, hits) {
+      const el = $('result');
+      vis(el, true);
       const names = res.guards || [];
-      const team = names.length > 1;
-      if (res.winner === 'guards') {
+      const win = res.winner === 'guards';
+      const lost = res.winner === 'anims';
+      cls(el, 'win', win);
+      const noise = $('res-noise');
+      set(noise, 'display', lost ? 'block' : 'none');
+      set(noise, 'opacity', lost && k < 2.2 ? '1' : '0.18');
+      vis($('res-clock'), win);
+      const reveal = k > (win ? 3.2 : 2.4);
+      if (win) {
         const roll = clamp((k - 1) / 1.6, 0, 1);
         const ease = roll * roll * (3 - 2 * roll);
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(W / 2 - 160, H / 2 - 120, 140, 150);
-        ctx.clip();
-        text(ctx, '5', W / 2 - 90, H / 2 - 40 - ease * 170, 140, '#fff', 'center');
-        text(ctx, '6', W / 2 - 90, H / 2 - 40 + (1 - ease) * 170, 140, '#fff', 'center');
-        ctx.restore();
-        text(ctx, 'AM', W / 2 + 40, H / 2 - 40, 140, '#fff', 'center');
-        if (k > 3.2) {
-          const who = names.length > 2 ? `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}` : names.join(' & ') || 'The guard';
-          text(ctx, `${who} survived ${nightLabel(res.night)}!`, W / 2, H / 2 + 90, 40, '#d8c25a', 'center');
-        }
-      } else if (res.winner === 'anims') {
-        if (k < 2.2) Art.staticScreen(ctx, t, 1);
-        else {
-          Art.staticScreen(ctx, t, 0.18);
-          text(ctx, 'Game Over', W - 60, H - 70, 64, '#f2f2ec', 'right');
-          const who = FN.CHAR_INFO[res.who] ? FN.CHAR_INFO[res.who].short : 'Something';
-          if (res.powerOut) text(ctx, 'The power ran out...', W / 2, H / 2 - 60, 34, '#a0a098', 'center');
-          text(ctx, `${who} got ${team ? 'the whole team' : names[0] || 'the guard'}.`, W / 2, H / 2, 46, '#e04a3a', 'center');
-          text(ctx, `Made it to ${hourLabel(Math.floor(res.t / (app.snap ? app.snap.hourLen : 89)))}.`, W / 2, H / 2 + 50, 32, '#cfcfc8', 'center');
-        }
+        set($('res-5'), 'transform', `translateY(${(-ease * 170).toFixed(1)}px)`);
+        set($('res-6'), 'transform', `translateY(${((1 - ease) * 170).toFixed(1)}px)`);
+        const who = names.length > 2 ? `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}` : names.join(' & ') || 'The guard';
+        text($('res-pre'), '');
+        text($('res-main'), k > 3.2 ? `${who} survived ${nightLabel(res.night)}!` : '');
+        text($('res-sub'), '');
+      } else if (lost) {
+        const after = k >= 2.2;
+        const who = FN.CHAR_INFO[res.who] ? FN.CHAR_INFO[res.who].short : 'Something';
+        text($('res-pre'), after && res.powerOut ? 'The power ran out...' : '');
+        text($('res-main'), after ? `${who} got ${names.length > 1 ? 'the whole team' : names[0] || 'the guard'}.` : '');
+        text($('res-sub'), after ? `Made it to ${hourLabel(Math.floor(res.t / (app.snap ? app.snap.hourLen : 89)))}.` : '');
       } else {
-        text(ctx, res.reason || 'The night was abandoned.', W / 2, H / 2, 40, '#cfcfc8', 'center');
+        text($('res-pre'), '');
+        text($('res-main'), res.reason || 'The night was abandoned.');
+        text($('res-sub'), '');
       }
-      if (k > (res.winner === 'guards' ? 3.2 : 2.4)) {
-        if (app.isHost) button(ctx, hits, { id: 'lobby', x: W / 2 - 160, y: H - 190, w: 320, h: 64, label: 'Back to lobby', enabled: true });
-        else text(ctx, 'Waiting for the host...', W / 2, H - 158, 30, '#8d8d86', 'center');
-      }
+      vis($('res-gameover'), lost && k >= 2.2);
+      vis($('res-btn'), reveal && app.isHost);
+      vis($('res-wait'), reveal && !app.isHost);
+      if (reveal && app.isHost) hits.push({ id: 'lobby', x: 480, y: 530, w: 320, h: 64 });
+    },
+
+    // Hide every in-game element (when leaving the game or showing the menu).
+    clear() {
+      for (const id of ['office', 'cams', 'tablet', 'hud', 'intro', 'jumpscare', 'result', 'loading']) vis($(id), false);
     },
   };
 
@@ -167,7 +322,7 @@
   class GuardView {
     constructor(app) {
       this.app = app;
-      this.scroll = (OFF().W - W) / 2;
+      this.scroll = OFFICE_MAX / 2;
       this.mon = false;
       this.monK = 0;
       this.cam = '1A';
@@ -270,10 +425,9 @@
         if (x < edge) this.scroll -= ((edge - x) / edge) * 950 * dt;
         if (x > W - edge) this.scroll += ((x - (W - edge)) / edge) * 950 * dt;
       }
-      const max = OFF().W - W;
-      this.scroll = clamp(this.scroll, 0, max);
+      this.scroll = clamp(this.scroll, 0, OFFICE_MAX);
       // Tell the team which way we're looking (only when it changes).
-      const look = this.scroll < max * 0.3 ? 'L' : this.scroll > max * 0.7 ? 'R' : 'C';
+      const look = this.scroll < OFFICE_MAX * 0.3 ? 'L' : this.scroll > OFFICE_MAX * 0.7 ? 'R' : 'C';
       if (look !== this.look) { this.look = look; this.sendMon(); }
       this.flickT -= dt;
       if (powered && this.flickT < -2 && Math.random() < dt * 0.25) this.flickT = 0.05 + Math.random() * 0.15;
@@ -285,14 +439,16 @@
       return FN.CHARS.find((c) => c !== 'foxy' && snap.anims[c].room === room) || null;
     }
 
-    draw(ctx, t) {
+    draw(t) {
       const snap = this.app.snap;
       this.hits = [];
-      if (this.monK < 1) {
+      const onCams = this.monK >= 1;
+      const po = snap.powerOut;
+      Scene.show(onCams ? 'cams' : 'office');
+      if (!onCams) {
         const inv = FN.CHARS.find((c) => c !== 'foxy' && snap.anims[c].room === 'OF');
-        const po = snap.powerOut;
-        const v = {
-          t, door: this.door,
+        Scene.office({
+          scroll: this.scroll, door: this.door,
           light: { L: this.lightOn('L'), R: this.lightOn('R') },
           doorway: { L: this.occupant('LD'), R: this.occupant('RD') },
           invader: inv && !this.mon ? { who: inv, side: snap.anims[inv].side || 'R' } : null,
@@ -300,89 +456,24 @@
           power: po ? po.phase : 'on',
           flash: po && po.phase === 'music' && Math.sin(t * 9) > 0.1 && Math.random() > 0.08,
           dim: this.dim,
-        };
-        Art.blitOffice(ctx, Art.renderOffice(v), this.scroll);
-        if (this.monK > 0) this.drawTablet(ctx, t);
-        else this.drawPingArrows(ctx, t);
+        });
       } else {
-        this.drawCams(ctx, t);
+        const since = this.app.t - this.camT;
+        let glitch = since < 0.3 ? 1 - since / 0.3 : 0;
+        if (snap.glitch[this.cam]) glitch = Math.max(glitch, 0.95);
+        const mm = mapMarks(snap, this.app.pid, this.app.pings, this.app.t);
+        Scene.cams(this.cam, snap, 0.5 + 0.5 * Math.sin(t * 0.3 + this.panPhase), glitch, t, camName(this.cam), { cam: this.cam, ...mm });
+        this.hits.push(...camHits());
       }
-      if (snap.powerOut && snap.powerOut.phase === 'dark') return;
-      drawClock(ctx, snap);
-      drawTeam(ctx, snap, this.app.pid, this.monK >= 1 ? 100 : 60);
-      drawCallouts(ctx, this.app.pings, this.app.t);
-      if (!snap.powerOut) {
-        drawPower(ctx, snap);
-        this.drawBar(ctx);
-        if (Object.keys(snap.guards).length > 1) button(ctx, this.hits, { id: 'ping', x: 30, y: H - 156, w: 190, h: 42, label: 'CALL OUT (F)', size: 26, enabled: true });
-      }
-    }
-
-    // Arrows at the edge of the office pointing at a door a teammate just called out.
-    drawPingArrows(ctx, t) {
-      const now = this.app.t;
-      for (const p of this.app.pings) {
-        if (p.cam || p.side === 'C' || now - p.at > T.pingTime || Math.sin(t * 10) < 0) continue;
-        const x = p.side === 'L' ? 40 : W - 40;
-        const d = p.side === 'L' ? -1 : 1;
-        poly(ctx, [[x + d * 22, H / 2], [x - d * 14, H / 2 - 34], [x - d * 14, H / 2 + 34]], p.color || '#fff');
-      }
-    }
-
-    drawTablet(ctx, t) {
-      const k = this.monK;
-      const y = H - H * 1.05 * k;
-      ctx.fillStyle = '#1a1b1e';
-      rr(ctx, 30, y, W - 60, H, 26);
-      ctx.fill();
-      ctx.fillStyle = '#060807';
-      rr(ctx, 60, y + 30, W - 120, H - 60, 12);
-      ctx.fill();
-      ctx.save();
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(Art.noiseTex[Math.floor(t * 30) % 6], 60, y + 30, W - 120, H - 60);
-      ctx.restore();
-    }
-
-    drawCams(ctx, t) {
-      const snap = this.app.snap;
-      const pan = 0.5 + 0.5 * Math.sin(t * 0.3 + this.panPhase);
-      Art.drawRoom(ctx, this.cam, snap, pan, t);
-      const since = this.app.t - this.camT;
-      let glitch = since < 0.3 ? 1 - since / 0.3 : 0;
-      if (snap.glitch[this.cam]) glitch = Math.max(glitch, 0.95);
-      Art.camEffects(ctx, t, glitch);
-      if (Math.floor(t * 1.5) % 2) ell(ctx, 52, 52, 13, 13, '#d01a10');
-      text(ctx, 'REC', 76, 54, 30, '#f0f0e8');
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(24, 24, W - 48, H - 48);
-      text(ctx, camName(this.cam), 1060, 318, 36, '#f2f2ec', 'center');
-      const mm = mapMarks(snap, this.app.pid, this.app.pings, this.app.t);
-      this.hits.push(...Art.drawMap(ctx, 860, 340, { cam: this.cam, marks: mm.marks, pings: mm.pings, t }));
-    }
-
-    drawBar(ctx) {
-      const b = { x: 250, y: 668, w: 660, h: 40 };
-      ctx.fillStyle = this.mon ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.18)';
-      ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 3;
-      for (const dx of [-12, 12]) {
-        for (const dy of [0, 10]) {
-          const cx = b.x + b.w / 2 + dx * 2, cy = b.y + 14 + dy;
-          const d = this.mon ? -6 : 6;
-          ctx.beginPath();
-          ctx.moveTo(cx - 12, cy + d);
-          ctx.lineTo(cx, cy - d);
-          ctx.lineTo(cx + 12, cy + d);
-          ctx.stroke();
-        }
-      }
-      this.bar = b;
+      Scene.tablet(this.monK);
+      if (po && po.phase === 'dark') { Scene.hideHud(); return; }
+      const team = Object.keys(snap.guards).length > 1;
+      Scene.hud({
+        snap, myPid: this.app.pid, pings: this.app.pings, now: this.app.t, t,
+        power: !po, bar: !po, mon: this.mon, ping: team && !po, teamTop: onCams ? 84 : 48, arrows: !onCams && this.monK === 0,
+      });
+      if (team && !po) this.hits.push({ id: 'ping', x: 30, y: 564, w: 190, h: 42 });
+      this.bar = po ? null : { x: 250, y: 668, w: 660, h: 40 };
     }
 
     inBar(x, y) { const b = this.bar; return b && x >= b.x && x <= b.x + b.w && y >= b.y - 10 && y <= b.y + b.h + 10; }
@@ -402,7 +493,7 @@
           if (!inBar) this.armed = true;
         }
         if (this.drag && !this.mon) {
-          this.scroll = clamp(this.drag.scroll - (x - this.drag.x), 0, OFF().W - W);
+          this.scroll = clamp(this.drag.scroll - (x - this.drag.x), 0, OFFICE_MAX);
           if (Math.abs(x - this.drag.x) > 12) this.drag.moved = true;
         }
         return;
@@ -423,15 +514,14 @@
         return;
       }
       if (this.monK > 0) return;
-      const [wx, wy] = Art.officePoint(x, y, this.scroll);
-      const O = OFF();
+      const wx = this.scroll + x, wy = y;
       for (const s of ['L', 'R']) {
-        const px = O.PANEL[s];
-        const r = O.BTN.r + 12;
-        if (Math.hypot(wx - px, wy - O.BTN.door) < r) { this.pressDoor(s); return; }
-        if (Math.hypot(wx - px, wy - O.BTN.light) < r) { this.pressLight(s); return; }
+        const px = OFFICE.PANEL[s];
+        const r = OFFICE.BTN.r + 12;
+        if (Math.hypot(wx - px, wy - OFFICE.BTN.door) < r) { this.pressDoor(s); return; }
+        if (Math.hypot(wx - px, wy - OFFICE.BTN.light) < r) { this.pressLight(s); return; }
       }
-      if (Math.hypot(wx - O.NOSE.x, wy - O.NOSE.y) < O.NOSE.r + 6) A.play('honk');
+      if (Math.hypot(wx - OFFICE.NOSE.x, wy - OFFICE.NOSE.y) < OFFICE.NOSE.r + 6) A.play('honk');
     }
 
     key(e) {
@@ -479,7 +569,7 @@
       this.cam = 'OF';
       this.camT = -10;
       this.hits = [];
-      this.scroll = (OFF().W - W) / 2;
+      this.scroll = OFFICE_MAX / 2;
       this.mx = W / 2;
       A.loop('ambience', true, 0.4);
     }
@@ -489,40 +579,44 @@
       const edge = 330;
       if (this.mx < edge) this.scroll -= ((edge - this.mx) / edge) * 900 * dt;
       if (this.mx > W - edge) this.scroll += ((this.mx - (W - edge)) / edge) * 900 * dt;
-      this.scroll = clamp(this.scroll, 0, OFF().W - W);
+      this.scroll = clamp(this.scroll, 0, OFFICE_MAX);
     }
 
     onSnap() {}
 
-    draw(ctx, t) {
+    draw(t) {
       const snap = this.app.snap;
-      this.hits = [];
-      if (this.cam === 'OF') {
-        const po = snap.powerOut;
+      this.hits = camHits();
+      const po = snap.powerOut;
+      const inOffice = this.cam === 'OF';
+      Scene.show(inOffice ? 'office' : 'cams', true);
+      const mm = mapMarks(snap, null, this.app.pings, this.app.t);
+      if (inOffice) {
         const inv = FN.CHARS.find((c) => c !== 'foxy' && snap.anims[c].room === 'OF');
         const occ = (room) => FN.CHARS.find((c) => c !== 'foxy' && snap.anims[c].room === room) || null;
-        Art.blitOffice(ctx, Art.renderOffice({
-          t, door: { L: snap.doors.L ? 1 : 0, R: snap.doors.R ? 1 : 0 }, light: snap.lights,
+        Scene.office({
+          scroll: this.scroll, door: { L: snap.doors.L ? 1 : 0, R: snap.doors.R ? 1 : 0 }, light: snap.lights,
           doorway: { L: occ('LD'), R: occ('RD') }, invader: inv ? { who: inv, side: snap.anims[inv].side || 'R' } : null,
           fan: t * 26, power: po ? po.phase : 'on', flash: po && po.phase === 'music' && Math.sin(t * 9) > 0.1, dim: 0,
-        }), this.scroll);
+        });
+        // The map still shows over the office so spectators can jump to any camera.
+        set(E.camWorld, 'display', 'none');
+        set(E.camDisabled, 'display', 'none');
+        for (const id of ['cam-noise', 'cam-bars', 'cam-scan', 'cam-roll', 'cam-vig2', 'cam-frame', 'rec']) set($(id), 'display', 'none');
+        text(E.camName, 'The Office');
+        Scene.map({ cam: null, ...mm });
       } else {
-        Art.drawRoom(ctx, this.cam, snap, 0.5 + 0.5 * Math.sin(t * 0.3), t);
+        for (const id of ['cam-noise', 'cam-scan', 'cam-roll', 'cam-vig2', 'cam-frame', 'rec']) set($(id), 'display', 'block');
         const since = this.app.t - this.camT;
-        Art.camEffects(ctx, t, Math.max(since < 0.3 ? 1 - since / 0.3 : 0, snap.glitch[this.cam] ? 0.9 : 0));
+        const glitch = Math.max(since < 0.3 ? 1 - since / 0.3 : 0, snap.glitch[this.cam] ? 0.9 : 0);
+        Scene.cams(this.cam, snap, 0.5 + 0.5 * Math.sin(t * 0.3), glitch, t, camName(this.cam), { cam: this.cam, ...mm });
       }
-      drawClock(ctx, snap);
-      if (!snap.powerOut) drawPower(ctx, snap);
-      text(ctx, 'SPECTATING', 30, 64, 34, '#d8c25a');
-      drawTeam(ctx, snap, null, 100);
-      drawCallouts(ctx, this.app.pings, this.app.t);
-      const y = 100 + 26 * (Object.keys(snap.guards).length + 1);
-      button(ctx, this.hits, { id: 'office', x: 30, y: y + 6, w: 180, h: 46, label: 'VIEW OFFICE', size: 26, enabled: this.cam !== 'OF' });
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(850, 300, 420, 410);
-      text(ctx, this.cam === 'OF' ? 'The Office' : camName(this.cam), 1060, 318, 32, '#f2f2ec', 'center');
-      const mm = mapMarks(snap, null, this.app.pings, this.app.t);
-      this.hits.push(...Art.drawMap(ctx, 860, 340, { cam: this.cam, marks: mm.marks, pings: mm.pings, t }));
+      Scene.tablet(0);
+      Scene.hud({ snap, myPid: null, pings: this.app.pings, now: this.app.t, t, power: !po, bar: false, spectating: true, teamTop: 84, arrows: false });
+      const y = 84 + 25 * (Object.keys(snap.guards).length + 1) + 10;
+      vis(E.specOffice, !inOffice);
+      set(E.specOffice, 'top', `${y}px`);
+      if (!inOffice) this.hits.push({ id: 'office', x: 30, y, w: 180, h: 46 });
     }
 
     pointer(type, x, y) {
@@ -544,5 +638,11 @@
     }
   }
 
-  FN.Views = { GuardView, SpectatorView, Overlays, hitTest };
+  // Leaving the spectator's office view hides some camera chrome; put it back for guards.
+  function resetCamChrome() {
+    for (const id of ['cam-noise', 'cam-scan', 'cam-roll', 'cam-vig2', 'cam-frame', 'rec']) set($(id), 'display', 'block');
+    if (E) { vis(E.specOffice, false); vis(E.specLabel, false); }
+  }
+
+  FN.Views = { GuardView, SpectatorView, Overlays, Scene, hitTest, resetCamChrome, util: { set, vis, img, text } };
 })();
