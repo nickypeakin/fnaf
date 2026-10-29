@@ -4,17 +4,11 @@ A browser remake of FNAF 1 that you play **together**. Up to 6 friends share the
 
 It runs entirely in the browser with no server and no install. One person hosts, gets a 5-letter room code, and everyone else joins with it. You can also play solo.
 
-## Opening the game
+## Play
 
-**Right now, no setup:** this link opens the current version straight from GitHub:
-https://raw.githack.com/nickypeakin/fnaf/claude/sleepy-ramanujan-69qj0g/index.html
+**https://nickypeakin.github.io/fnaf/**
 
-**Permanent link (one-time setup, recommended):** turn on GitHub Pages:
-
-1. On GitHub, open this repo and go to **Settings → Pages**.
-2. Under **Build and deployment**, set **Source** to *Deploy from a branch*.
-3. Pick the branch `claude/sleepy-ramanujan-69qj0g` and the **/ (root)** folder, then **Save**.
-4. After a minute or two the game is live at **https://nickypeakin.github.io/fnaf/**. It updates by itself whenever the code changes.
+That's the link to send your friends. The site is published by GitHub Pages from the `gh-pages` branch, so pushing a new version to `gh-pages` updates it (give it a minute).
 
 ## Playing with friends
 
