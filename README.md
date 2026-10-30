@@ -66,10 +66,13 @@ The host's computer runs the world (mobs, items, furnaces), so the world stays o
 playing. Connections are peer-to-peer (WebRTC via PeerJS's free signalling server). Some strict networks
 or privacy blockers stop peer-to-peer connections; if joining fails, try another network.
 
-## Needs WebGL 2
+## Graphics
 
-The game draws the world with WebGL 2. If a privacy or anti-fingerprinting extension blocks WebGL,
-allow it for this site. The game shows a message if it can't start.
+The game draws with WebGL 2 when it can. If WebGL or canvas is blocked (for example by a privacy or
+anti-fingerprinting tool), it switches to **compatible graphics**: the world is drawn in plain
+JavaScript and shown as an ordinary image, so nothing needs to be allowed. It's lower resolution but
+fully playable. Switch modes under *Options → Graphics*, from the link on the title screen, or by
+adding `?gfx=compat` or `?gfx=fast` to the address.
 
 ## Not included (yet)
 
@@ -95,7 +98,8 @@ Code layout:
 - `js/blocks.js` — every block and item; `js/recipes.js` — crafting and smelting
 - `js/worldgen.js` — terrain, caves, ores, biomes and trees
 - `js/world-worker.js` — runs in a Web Worker: generates chunks, computes light, builds meshes
-- `js/renderer.js` — WebGL 2 drawing; `js/world.js` — chunk streaming, raycasts, collisions
+- `js/renderer.js` — WebGL 2 drawing; `js/soft-renderer.js` — compatible graphics without WebGL or canvas
+- `js/world.js` — chunk streaming, raycasts, collisions
 - `js/player.js` — movement physics; `js/game.js` — gameplay; `js/entities.js` — mobs and items
 - `js/ui.js` — HUD and inventory screens; `js/net.js` — multiplayer; `js/save.js` — saving; `js/main.js` — menus
 
