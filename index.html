@@ -2,213 +2,188 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Five Nights at Freddy's: Co-op</title>
-  <meta name="description" content="An unofficial co-op take on Five Nights at Freddy's. Share the office with your friends and survive the night together.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blockcraft</title>
+  <meta name="description" content="A blocky caves-and-cliffs survival game you can play with friends in the browser.">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <!-- The game screen: plain images and page elements in a 1280x720 box scaled to fit the window.
-       No canvas or WebGL, so browser privacy tools that block those don't break the game. -->
-  <div id="viewport">
-    <div id="stage">
-      <div id="backdrop" class="layer">
-        <img id="bd-head" class="sprite" alt="">
-        <div id="bd-shade" class="fill"></div>
-        <div class="fill noise" id="bd-noise"></div>
-        <div id="bd-fade" class="fill"></div>
-      </div>
+  <canvas id="game"></canvas>
 
-      <div id="office" class="layer hidden">
-        <div id="office-world">
-          <img id="office-bg" alt="">
-          <div class="doorway" id="dw-L"><img class="dw-img" alt=""><img class="dw-shutter" alt=""></div>
-          <div class="doorway" id="dw-R"><img class="dw-img" alt=""><img class="dw-shutter" alt=""></div>
-          <div class="obtn door" id="btn-door-L"></div>
-          <div class="obtn light" id="btn-light-L"></div>
-          <div class="obtn door" id="btn-door-R"></div>
-          <div class="obtn light" id="btn-light-R"></div>
-          <div class="crt noise" id="scr-0"></div>
-          <div class="crt noise" id="scr-1"></div>
-          <img id="fan-blades" alt="">
-          <img id="fan-cage" alt="">
-          <img id="invader" class="sprite" alt="">
-          <div class="spill" id="spill-L"></div>
-          <div class="spill" id="spill-R"></div>
-          <div id="office-dim" class="fill"></div>
-          <div id="office-po" class="fill"></div>
-          <img id="po-freddy" alt="">
-        </div>
+  <!-- in-game overlay -->
+  <div id="hud" class="hidden">
+    <div id="overlay-water" class="screen-tint"></div>
+    <div id="overlay-hurt" class="screen-tint"></div>
+    <div id="overlay-freeze" class="screen-tint"></div>
+    <div id="crosshair"></div>
+    <div id="nametags"></div>
+    <div id="bottom">
+      <div id="itemname"></div>
+      <div id="stats">
+        <div id="armor-bar" class="bar left"></div>
+        <div id="air-bar" class="bar right"></div>
+        <div id="health-bar" class="bar left"></div>
+        <div id="food-bar" class="bar right"></div>
       </div>
-
-      <div id="cams" class="layer hidden">
-        <div id="cam-world">
-          <img id="cam-bg" alt="">
-          <img class="sprite cam-char" id="cc-freddy" alt="">
-          <img class="sprite cam-char" id="cc-bonnie" alt="">
-          <img class="sprite cam-char" id="cc-chica" alt="">
-          <div id="cove-peek-clip"><img class="sprite" id="cove-peek" alt=""></div>
-          <img id="curtain-L" class="curtain" alt="">
-          <img id="curtain-R" class="curtain" alt="">
-          <img class="sprite" id="cove-out" alt="">
-          <img class="sprite" id="foxy-run" alt="">
-          <div id="cam-vignette"></div>
-        </div>
-        <div id="cam-disabled">-CAMERA DISABLED-<br><span>AUDIO ONLY</span></div>
-        <div id="cam-noise" class="fill noise"></div>
-        <div id="cam-bars" class="fill"></div>
-        <div id="cam-scan" class="fill"></div>
-        <div id="cam-roll"></div>
-        <div id="cam-vig2" class="fill"></div>
-        <div id="cam-frame"></div>
-        <div id="rec"><span></span>REC</div>
-        <div id="cam-name"></div>
-        <div id="map"></div>
-      </div>
-
-      <div id="tablet" class="hidden"><div class="noise" id="tablet-noise"></div></div>
-
-      <div id="hud" class="hidden">
-        <div id="clock"><div id="clock-hour">12 AM</div><div id="clock-night">Night 1</div></div>
-        <div id="spec-label" class="hidden">SPECTATING</div>
-        <div id="team"></div>
-        <div id="spec-office" class="hud-btn hidden">VIEW OFFICE</div>
-        <div id="callouts"></div>
-        <div id="arrow-L" class="ping-arrow"></div>
-        <div id="arrow-R" class="ping-arrow"></div>
-        <div id="btn-ping" class="hud-btn hidden">CALL OUT (F)</div>
-        <div id="power"><div>Power left: <span id="power-val">100</span>%</div><div>Usage: <span id="usage"></span></div></div>
-        <div id="mon-bar"><svg viewBox="0 0 80 30" aria-hidden="true"><path d="M14 18 L26 8 L38 18 M14 26 L26 16 L38 26 M42 18 L54 8 L66 18 M42 26 L54 16 L66 26"/></svg></div>
-      </div>
-
-      <div id="intro" class="layer hidden"><div id="intro-time">12:00 AM</div><div id="intro-night"></div><div id="intro-team"></div></div>
-      <div id="jumpscare" class="layer hidden"><img id="js-head" class="sprite" alt=""><div class="fill noise" id="js-noise"></div></div>
-      <div id="result" class="layer hidden">
-        <div class="fill noise" id="res-noise"></div>
-        <div id="res-clock"><div id="res-digits"><span id="res-5">5</span><span id="res-6">6</span></div><span id="res-am">AM</span></div>
-        <div id="res-pre"></div>
-        <div id="res-main"></div>
-        <div id="res-sub"></div>
-        <div id="res-gameover">Game Over</div>
-        <div id="res-btn" class="hud-btn hidden">Back to lobby</div>
-        <div id="res-wait" class="hidden">Waiting for the host...</div>
-      </div>
-      <div id="loading" class="layer hidden">Connecting to the night...</div>
+      <div id="xp-bar"><div id="xp-fill"></div><span id="xp-level"></span></div>
+      <div id="hotbar"></div>
     </div>
+    <div id="debug" class="hidden"></div>
+    <div id="chat"><div id="chat-log"></div><input id="chat-input" class="hidden" maxlength="200" autocomplete="off" spellcheck="false"></div>
+    <div id="toast"></div>
+    <div id="room-badge" class="hidden"></div>
+    <div id="mobile-controls" class="hidden">
+      <div id="stick"><div id="stick-knob"></div></div>
+      <button id="m-jump">⤒</button>
+      <button id="m-sneak">⤓</button>
+      <button id="m-break">⛏</button>
+      <button id="m-place">▣</button>
+      <button id="m-inv">☰</button>
+      <button id="m-pause">❚❚</button>
+    </div>
+    <div id="click-to-play" class="hidden">Click to play</div>
   </div>
 
-  <!-- Main menu -->
-  <section id="menu" class="screen">
-    <div class="panel menu-panel">
-      <h1 class="title">Five<br>Nights<br>at<br>Freddy's</h1>
-      <div class="subtitle">CO-OP</div>
+  <!-- inventory / crafting / furnace / chest windows -->
+  <div id="window-layer" class="hidden">
+    <div id="window" class="panel"></div>
+  </div>
+  <div id="cursor-stack" class="hidden"></div>
+  <div id="tooltip" class="hidden"></div>
 
-      <label class="field">
-        <span>Your name</span>
-        <input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Mike">
+  <!-- menus -->
+  <div id="menus">
+    <section id="menu-title" class="menu">
+      <div class="logo">BLOCKCRAFT</div>
+      <div class="splash" id="splash">Caves &amp; Cliffs!</div>
+      <div class="menu-col">
+        <button data-go="menu-single">Singleplayer</button>
+        <button data-go="menu-multi">Multiplayer</button>
+        <button data-go="menu-settings">Options…</button>
+        <button data-go="menu-help">How to Play</button>
+      </div>
+      <div class="foot">Not affiliated with Mojang or Microsoft. All art is original.</div>
+    </section>
+
+    <section id="menu-single" class="menu hidden">
+      <h2>Select World</h2>
+      <div id="world-list" class="list"></div>
+      <div class="menu-row">
+        <button data-go="menu-create">Create New World</button>
+        <button data-go="menu-title">Back</button>
+      </div>
+    </section>
+
+    <section id="menu-create" class="menu hidden">
+      <h2>Create New World</h2>
+      <label>World Name<input id="new-name" value="New World" maxlength="40"></label>
+      <label>Seed (blank for random)<input id="new-seed" maxlength="40"></label>
+      <label>Game Mode
+        <select id="new-mode"><option value="survival">Survival</option><option value="creative">Creative</option></select>
       </label>
-
-      <button id="btn-solo" class="btn">&gt;&gt; Play solo</button>
-      <button id="btn-host" class="btn">&gt;&gt; Host a game with friends</button>
-      <div class="join-row">
-        <input id="join-code" maxlength="5" autocomplete="off" spellcheck="false" placeholder="CODE">
-        <button id="btn-join" class="btn">&gt;&gt; Join</button>
+      <label>Difficulty
+        <select id="new-diff"><option value="1">Easy</option><option value="2" selected>Normal</option><option value="3">Hard</option><option value="0">Peaceful</option></select>
+      </label>
+      <label class="check"><input type="checkbox" id="new-host"> Open to friends (multiplayer room)</label>
+      <div class="menu-row">
+        <button id="btn-create" class="primary">Create World</button>
+        <button data-go="menu-single">Cancel</button>
       </div>
-      <button id="btn-help" class="btn small">How to play</button>
-      <p id="menu-status" class="status" role="status"></p>
-      <p id="load-status" class="hint"></p>
-      <p class="fine">Unofficial fan game. Not affiliated with Scott Cawthon or Five Nights at Freddy's.</p>
-    </div>
+    </section>
 
-    <div id="help" class="panel help hidden">
-      <h2>How to play</h2>
-      <h3>Surviving the night</h3>
-      <ul>
-        <li>Survive from 12 AM until 6 AM. Freddy, Bonnie, Chica and Foxy roam the pizzeria and want in.</li>
-        <li><b>Doors</b> (Q / E) block anyone in the doorway. <b>Lights</b> (A / D) show who is standing there.</li>
-        <li><b>Monitor</b> (Space, or hover the bar at the bottom) shows the cameras. Click a camera on the map, or use the arrow keys.</li>
-        <li>You can't reach the door and light buttons while your monitor is up.</li>
-        <li>Everything uses power. If it runs out, the doors open, the lights die, and Freddy comes for you.</li>
-        <li>If something gets into the office, the door and light on that side stop working, and it strikes the moment anyone is off their monitor.</li>
-      </ul>
-      <h3>Playing together</h3>
-      <ul>
-        <li>Everyone is a guard in the same office. The doors, lights and power are shared, and every guard has their own monitor.</li>
-        <li>Split the jobs: someone on the left door, someone on the right, someone on the cameras.</li>
-        <li><b>Call out</b> (F) flashes the camera you're watching, or the door you're facing, on everyone's screen.</li>
-        <li>The team list shows where everybody is looking. Dots on the camera map show which cameras your teammates are on.</li>
-        <li>Bigger crews face more aggressive animatronics, but get a longer-lasting battery.</li>
-      </ul>
-      <h3>Hosting</h3>
-      <ul>
-        <li>One person hosts and shares the 5-letter code (or the invite link). Everyone else joins with it.</li>
-        <li>Up to 6 guards per night; anyone else can watch.</li>
-        <li>No server needed. Players connect directly to the host's browser, so the host should keep the tab open.</li>
-      </ul>
-      <button id="btn-help-close" class="btn small">Close</button>
-    </div>
-  </section>
-
-  <!-- Lobby -->
-  <section id="lobby" class="screen hidden">
-    <div class="panel lobby-panel">
-      <div class="lobby-head">
-        <div>
-          <div class="label" id="lobby-label">ROOM CODE</div>
-          <div class="code" id="lobby-code">-----</div>
-        </div>
-        <div class="lobby-head-btns">
-          <button id="btn-copy" class="btn small">Copy invite link</button>
-          <button id="btn-leave" class="btn small">Leave</button>
-        </div>
+    <section id="menu-multi" class="menu hidden">
+      <h2>Multiplayer</h2>
+      <p class="hint">Play with friends: one person hosts a world and shares the room code. Everyone else joins with it.</p>
+      <label>Your name<input id="mp-name" maxlength="16"></label>
+      <div class="menu-col">
+        <button data-go="menu-single" id="btn-host-pick">Host one of my worlds…</button>
       </div>
-
-      <div id="crew-wrap">
-        <h2>The night crew</h2>
-        <ul id="crew" class="crew"></ul>
-        <p id="watchers" class="hint"></p>
-        <button id="btn-role" class="btn small"></button>
-        <p id="crew-hint" class="blurb"></p>
+      <label>Room code<input id="join-code" maxlength="8" placeholder="e.g. K7QF2" style="text-transform:uppercase"></label>
+      <div class="menu-row">
+        <button id="btn-join" class="primary">Join Room</button>
+        <button data-go="menu-title">Back</button>
       </div>
+      <p id="mp-status" class="hint"></p>
+    </section>
 
-      <h2>Settings</h2>
-      <div class="settings">
-        <label class="field"><span>Night</span>
-          <select id="set-night">
-            <option value="1">Night 1</option><option value="2">Night 2</option><option value="3">Night 3</option>
-            <option value="4">Night 4</option><option value="5">Night 5</option><option value="6">Night 6</option>
-            <option value="7">Custom night</option>
-          </select>
-        </label>
-        <label class="field"><span>Length</span><select id="set-length"></select></label>
+    <section id="menu-settings" class="menu hidden">
+      <h2>Options</h2>
+      <label>Render distance <span id="v-dist"></span><input type="range" id="s-dist" min="2" max="12" step="1"></label>
+      <label>Field of view <span id="v-fov"></span><input type="range" id="s-fov" min="50" max="110" step="1"></label>
+      <label>Mouse sensitivity <span id="v-sens"></span><input type="range" id="s-sens" min="10" max="200" step="1"></label>
+      <label>Brightness <span id="v-gamma"></span><input type="range" id="s-gamma" min="0" max="100" step="1"></label>
+      <label>Volume <span id="v-vol"></span><input type="range" id="s-vol" min="0" max="100" step="1"></label>
+      <label>Resolution <span id="v-scale"></span><input type="range" id="s-scale" min="40" max="100" step="5"></label>
+      <label class="check"><input type="checkbox" id="s-bob"> View bobbing</label>
+      <label class="check"><input type="checkbox" id="s-invert"> Invert mouse</label>
+      <div class="menu-row"><button id="btn-settings-done" class="primary">Done</button></div>
+    </section>
+
+    <section id="menu-help" class="menu hidden">
+      <h2>How to Play</h2>
+      <div class="help">
+        <p><b>Move</b> W A S D · <b>Jump</b> Space · <b>Sneak</b> Shift · <b>Sprint</b> Ctrl or double-tap W</p>
+        <p><b>Break</b> hold left mouse · <b>Place / use</b> right mouse · <b>Pick block</b> middle mouse</p>
+        <p><b>Inventory</b> E · <b>Drop</b> Q · <b>Hotbar</b> 1–9 or scroll · <b>Swap hands</b> F</p>
+        <p><b>Chat / commands</b> T or / · <b>Debug</b> F3 · <b>Hide HUD</b> F1 · <b>Pause</b> Esc</p>
+        <p><b>Fly</b> (creative) double-tap Space · <b>Zoom</b> with a spyglass (hold right mouse)</p>
+        <p>Punch trees for logs → planks → crafting table. Open the <b>recipe book</b> (green book button) in any crafting grid to see every recipe and fill the grid with one click.</p>
+        <p>Commands: /gamemode creative|survival, /time set day|night, /tp x y z, /give item [count], /seed, /spawn, /kill, /weather clear</p>
       </div>
-      <div id="custom" class="custom hidden"></div>
-      <p class="hint" id="ai-hint">Survive a night and the next one is queued up. Custom night lets you set each animatronic's AI from 0 to 20.</p>
+      <div class="menu-row"><button data-go="menu-title">Back</button></div>
+    </section>
 
-      <button id="btn-start" class="btn big">&gt;&gt; Start night</button>
-      <p id="lobby-status" class="status" role="status"></p>
-    </div>
-  </section>
+    <section id="menu-pause" class="menu hidden">
+      <h2>Game Menu</h2>
+      <div class="menu-col">
+        <button id="btn-resume" class="primary">Back to Game</button>
+        <button id="btn-open-lan">Open to Friends</button>
+        <button id="btn-pause-settings">Options…</button>
+        <button id="btn-quit">Save and Quit to Title</button>
+      </div>
+      <p id="pause-room" class="hint"></p>
+    </section>
 
-  <!-- In-game corner buttons -->
-  <div id="ingame" class="hidden">
-    <button id="btn-mute" class="icon-btn" title="Mute (M)">SND</button>
-    <button id="btn-full" class="icon-btn" title="Fullscreen">[ ]</button>
-    <button id="btn-quit" class="icon-btn" title="Leave game">EXIT</button>
+    <section id="menu-death" class="menu hidden death">
+      <h2>You Died!</h2>
+      <p id="death-msg"></p>
+      <div class="menu-col">
+        <button id="btn-respawn" class="primary">Respawn</button>
+        <button id="btn-death-quit">Title Screen</button>
+      </div>
+    </section>
+
+    <section id="menu-loading" class="menu hidden">
+      <h2 id="loading-title">Loading terrain…</h2>
+      <div class="progress"><div id="loading-bar"></div></div>
+      <p id="loading-msg" class="hint"></p>
+    </section>
+
+    <section id="menu-error" class="menu hidden">
+      <h2>Something went wrong</h2>
+      <p id="error-msg"></p>
+      <div class="menu-row"><button data-go="menu-title">Back to Title</button></div>
+    </section>
   </div>
-
-  <div id="rotate" class="hidden">Turn your phone sideways to play.</div>
-  <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/net.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/noise.js"></script>
+  <script src="js/blocks.js"></script>
+  <script src="js/atlas.js"></script>
+  <script src="js/shapes.js"></script>
+  <script src="js/worldgen.js"></script>
+  <script src="js/recipes.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/player.js"></script>
   <script src="js/audio.js"></script>
-  <script src="js/layout.js"></script>
-  <script src="js/assets-manifest.js"></script>
-  <script src="js/assets.js"></script>
-  <script src="js/views.js"></script>
+  <script src="js/inventory.js"></script>
+  <script src="js/entities.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/save.js"></script>
+  <script src="js/game.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

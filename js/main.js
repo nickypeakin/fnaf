@@ -1,453 +1,268 @@
-// App shell: menus, lobby, connecting/hosting, input routing and the render loop.
-(function () {
+// Boot, menus, settings, world list, hosting and joining, pause and death screens.
+(function (G) {
   'use strict';
-  const FN = window.FN;
-  const A = FN.Audio;
-  const V = FN.Views;
-  const U = V.util;
-  const L = FN.LAYOUT;
-  const W = FN.W, H = FN.H;
+  const MC = G.MC;
   const $ = (id) => document.getElementById(id);
 
-  const App = {
-    link: null, host: null, isHost: false, pid: null, lobby: null,
-    screen: 'menu', view: null, role: null, snap: null,
-    t: 0, pings: [], js: null, resultAt: null, resultHits: [],
-    send(msg) { if (this.link) this.link.send(msg); },
+  // ---------------- settings ----------------
+  const DEFAULTS = { dist: 6, fov: 70, sens: 100, gamma: 50, vol: 70, scale: 100, bob: true, invert: false, name: '' };
+  let settings = { ...DEFAULTS };
+  try { Object.assign(settings, JSON.parse(localStorage.getItem('blockcraft-settings') || '{}')); } catch (e) { /* storage blocked */ }
+  if (!settings.name) settings.name = 'Player' + Math.floor(100 + Math.random() * 900);
+  const saveSettings = () => { try { localStorage.setItem('blockcraft-settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
+  // smaller default view on phones
+  if (matchMedia('(pointer: coarse)').matches) settings.dist = Math.min(settings.dist, 4);
+  let game = null;
+
+  // ---------------- menus ----------------
+  let current = 'menu-title';
+  function show(id) {
+    for (const m of document.querySelectorAll('.menu')) m.classList.toggle('hidden', m.id !== id);
+    current = id;
+    if (game) game.menuOpen = !!id;
+    if (id === 'menu-single') refreshWorlds();
+    if (id === 'menu-settings') { fillSettings(); $('menu-settings').classList.toggle('solo', !(game && game.running)); }
+    if (id === 'menu-multi') $('mp-name').value = settings.name;
+  }
+  function hideMenus() { show(null); }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-go]');
+    if (!b) return;
+    if (b.id === 'btn-host-pick') { hostPick = true; settings.name = $('mp-name').value.trim() || settings.name; saveSettings(); }
+    else if (b.dataset.go === 'menu-single' && b.closest('#menu-title')) hostPick = false;
+    show(b.dataset.go);
+  });
+  const SPLASH = ['Caves & Cliffs!', 'Now with goats!', 'Axolotls!', 'Mind the dripstone!', `${MC.Recipes.CRAFT.length} recipes!`, 'Play with friends!', 'Dig deeper!', 'Copper ages!', 'Lush caves!', 'Amethyst geodes!', 'Deepslate!', 'Tall mountains!'];
+  $('splash').textContent = SPLASH[Math.floor(Math.random() * SPLASH.length)];
+
+  function errorScreen(msg) { $('error-msg').textContent = msg; show('menu-error'); }
+
+  // ---------------- renderer ----------------
+  const canvas = $('game');
+  let renderer;
+  try { renderer = new MC.Renderer(canvas); }
+  catch (e) {
+    errorScreen('3D graphics (WebGL 2) are switched off or blocked in this browser. Blockcraft needs them to draw the world — please allow WebGL for this site in your privacy or anti-fingerprinting settings, or try another browser. (' + e.message + ')');
+    for (const b of document.querySelectorAll('#menu-error button')) b.style.display = 'none';
+    return;
+  }
+  const audio = new MC.Audio();
+  audio.setVolume(settings.vol / 100);
+  game = new MC.Game(renderer, audio, settings);
+  G.blockcraft = game; // handy for debugging from the console
+  let hostPick = false;
+  let worldRecord = null;
+
+  renderer.loadTextures().catch((e) => errorScreen('Could not load textures: ' + e.message));
+  // the classic dirt backdrop for menus, cut out of the texture atlas
+  (function menuBackground() {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 16;
+      const i = MC.TEX.dirt, cols = MC.ATLAS.cols;
+      c.getContext('2d').drawImage(img, (i % cols) * 16, Math.floor(i / cols) * 16, 16, 16, 0, 0, 16, 16);
+      document.documentElement.style.setProperty('--menu-bg', `url(${c.toDataURL()})`);
+    };
+    img.src = 'assets/terrain.png';
+  })();
+
+  // a slowly turning background world on the title screen would be nice, but keep it simple: a dark backdrop
+
+  // ---------------- world list ----------------
+  async function refreshWorlds() {
+    const list = $('world-list');
+    list.innerHTML = '<p class="hint">Loading…</p>';
+    const worlds = await MC.Save.list();
+    list.innerHTML = '';
+    if (hostPick) { const h = document.createElement('p'); h.className = 'hint'; h.textContent = 'Pick a world to host. Friends can join with the room code you get.'; list.appendChild(h); }
+    if (!worlds.length) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'No worlds yet. Create one!'; list.appendChild(p); }
+    for (const w of worlds) {
+      const row = document.createElement('div');
+      row.className = 'world';
+      const when = w.played ? new Date(w.played).toLocaleString() : '';
+      row.innerHTML = `<div class="meta"><span></span><small></small></div>`;
+      row.querySelector('span').textContent = w.name;
+      row.querySelector('small').textContent = `${w.mode === 'creative' ? 'Creative' : 'Survival'} · seed ${w.seed} · ${when}`;
+      const play = document.createElement('button'); play.textContent = hostPick ? 'Host' : 'Play'; play.className = 'primary';
+      play.onclick = (e) => { e.stopPropagation(); playWorld(w.id, hostPick); };
+      const host = document.createElement('button'); host.textContent = 'Host'; host.title = 'Play with friends';
+      host.onclick = (e) => { e.stopPropagation(); playWorld(w.id, true); };
+      const del = document.createElement('button'); del.textContent = '✖'; del.title = 'Delete world';
+      del.onclick = async (e) => { e.stopPropagation(); if (confirm(`Delete "${w.name}" forever?`)) { await MC.Save.remove(w.id); refreshWorlds(); } };
+      row.appendChild(play);
+      if (!hostPick) row.appendChild(host);
+      row.appendChild(del);
+      row.ondblclick = () => playWorld(w.id, hostPick);
+      list.appendChild(row);
+    }
+    if (!(await MC.Save.persistent)) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'Browser storage is blocked, so worlds will not be saved after you close this tab.'; list.appendChild(p); }
+  }
+
+  $('btn-create').onclick = async () => {
+    const name = $('new-name').value.trim() || 'New World';
+    const seedText = $('new-seed').value.trim();
+    const seed = seedText ? MC.seedFromString(seedText) : (Math.random() * 2 ** 31) | 0;
+    const rec = { id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, seed, mode: $('new-mode').value, difficulty: +$('new-diff').value, created: Date.now() };
+    await MC.Save.put(rec);
+    playWorld(rec.id, $('new-host').checked || hostPick);
   };
-  FN.App = App;
 
-  // ---------------- helpers ----------------
-  function toast(msg, error) {
-    const d = document.createElement('div');
-    d.className = 'toast' + (error ? ' error' : '');
-    d.textContent = msg;
-    $('toasts').appendChild(d);
-    setTimeout(() => d.remove(), 4000);
+  async function playWorld(id, host) {
+    audio.unlock();
+    const rec = await MC.Save.get(id);
+    if (!rec) { errorScreen('That world could not be loaded.'); return; }
+    worldRecord = rec;
+    showLoading('Loading world…');
+    let net = null;
+    if (host) {
+      try { net = await MC.Net.host(null, rec.players || {}); }
+      catch (e) { errorScreen(e.message + ' You can still play this world on your own.'); return; }
+    }
+    startGame({ id: rec.id, name: rec.name, seed: rec.seed, mode: rec.mode, difficulty: rec.difficulty, data: rec.player || rec.edits ? rec : null, net });
   }
 
-  function setStatus(id, msg, error) {
-    const el = $(id);
-    el.textContent = msg || '';
-    el.classList.toggle('error', !!error);
+  function startGame(info) {
+    game.onLoaded = () => { hideMenus(); game.requestPointer(); };
+    game.onPause = () => pause();
+    game.onDeath = (msg) => { $('death-msg').textContent = msg; show('menu-death'); };
+    game.onAutosave = () => save();
+    game.onDisconnect = (msg) => { quit(false); errorScreen(msg); };
+    if (info.net) info.net.game = game;
+    game.start(info);
+    if (info.net) info.net.game = game;
+    updateRoomBadge();
+    loadingLoop();
   }
 
-  function showScreen(name) {
-    App.screen = name;
-    $('menu').classList.toggle('hidden', name !== 'menu');
-    $('lobby').classList.toggle('hidden', name !== 'lobby');
-    $('ingame').classList.toggle('hidden', name !== 'game');
-    checkRotate();
-  }
-
-  function getName() {
-    const n = FN.Net.cleanName($('name').value);
-    try { localStorage.setItem('fnaf-name', n); } catch (e) { /* storage blocked */ }
-    return n;
-  }
-
-  function checkRotate() {
-    const portraitTouch = window.innerHeight > window.innerWidth && matchMedia('(pointer: coarse)').matches;
-    $('rotate').classList.toggle('hidden', !(portraitTouch && App.screen === 'game'));
-  }
-
-  // ---------------- connection lifecycle ----------------
-  function onMessage(msg) {
-    if (!msg || typeof msg !== 'object') return;
-    switch (msg.t) {
-      case 'welcome':
-        App.pid = msg.pid;
-        showScreen('lobby');
-        break;
-      case 'lobby':
-        App.lobby = msg;
-        renderLobby();
-        if (msg.phase === 'lobby' && App.screen === 'game') backToLobby();
-        break;
-      case 'start':
-        startGameView(!!msg.late);
-        break;
-      case 'snap':
-        onSnap(msg.s, msg.ev || []);
-        break;
-      case 'msg':
-        toast(msg.text);
-        setStatus('lobby-status', msg.text, true);
-        break;
-      case 'bye':
-        leave(msg.reason);
-        break;
+  function showLoading(title) { $('loading-title').textContent = title; $('loading-bar').style.width = '0%'; $('loading-msg').textContent = ''; show('menu-loading'); }
+  function loadingLoop() {
+    if (current !== 'menu-loading' || !game.running) return;
+    if (game.player.frozen) {
+      $('loading-title').textContent = 'Building terrain…';
+      $('loading-bar').style.width = Math.round((game.loadProgress || 0) * 100) + '%';
+      const secs = (performance.now() - game.loadStart) / 1000;
+      $('loading-msg').textContent = secs > 12 ? 'This is taking a while — lowering the render distance in Options helps on slower computers.' : '';
+      requestAnimationFrame(loadingLoop);
     }
   }
 
-  async function createRoom(online) {
-    A.init();
-    if (online && !window.Peer) {
-      setStatus('menu-status', 'The multiplayer library didn\'t load. Check your connection and refresh.', true);
-      return;
+  function updateRoomBadge() {
+    const b = $('room-badge');
+    if (game.net) {
+      b.textContent = game.isHost ? `Room code: ${game.net.code}` : `In ${game.net.code}`;
+      b.classList.remove('hidden');
+      $('pause-room').textContent = game.isHost ? `Friends can join with room code ${game.net.code} (Multiplayer → Join Room).` : `Playing in room ${game.net.code}.`;
+      $('btn-open-lan').classList.add('hidden');
+    } else {
+      b.classList.add('hidden');
+      $('pause-room').textContent = '';
+      $('btn-open-lan').classList.remove('hidden');
     }
-    setStatus('menu-status', online ? 'Opening a room...' : '');
-    const host = new FN.Net.RoomHost({ name: getName(), online, onLocal: (m) => queueMicrotask(() => onMessage(m)) });
-    App.host = host;
-    App.isHost = true;
-    App.link = new FN.Net.LocalLink(host);
+  }
+
+  // ---------------- saving ----------------
+  async function save() {
+    if (!game.running || !game.isHost || !worldRecord) return;
+    const data = game.saveData();
+    Object.assign(worldRecord, data);
+    try { await MC.Save.put(worldRecord); } catch (e) { console.warn('save failed', e); }
+  }
+  window.addEventListener('beforeunload', () => { if (game.running) save(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && game.running) save(); });
+
+  // ---------------- pause ----------------
+  let pausedAt = 0;
+  function pause() {
+    if (!game.running || game.dead) return;
+    game.paused = true;
+    pausedAt = performance.now();
+    show('menu-pause');
+  }
+  $('btn-resume').onclick = () => { game.paused = false; hideMenus(); game.requestPointer(); };
+  $('btn-quit').onclick = () => quit(true);
+  $('btn-pause-settings').onclick = () => show('menu-settings');
+  $('btn-open-lan').onclick = async () => {
+    if (game.net) return;
+    $('btn-open-lan').disabled = true;
     try {
-      await host.open();
-      setStatus('menu-status', '');
-    } catch (err) {
-      App.host = null;
-      App.link = null;
-      App.isHost = false;
-      setStatus('menu-status', `Couldn't open an online room (${err.type || err.message}). Solo still works.`, true);
-    }
+      const net = await MC.Net.host(null, (worldRecord && worldRecord.players) || {});
+      net.game = game;
+      game.net = net;
+      game.myId = net.id;
+      updateRoomBadge();
+      game.ui.chat(`Your world is open! Room code: ${net.code}`, '#5f5');
+    } catch (e) { $('pause-room').textContent = e.message; }
+    $('btn-open-lan').disabled = false;
+  };
+  async function quit(doSave) {
+    if (doSave) await save();
+    if (game.net) { game.net.close(); game.net = null; }
+    game.stop();
+    worldRecord = null;
+    hostPick = false;
+    show('menu-title');
   }
+  $('btn-respawn').onclick = () => { game.respawn(); hideMenus(); show('menu-loading'); showLoading('Respawning…'); loadingLoop(); };
+  $('btn-death-quit').onclick = () => quit(true);
 
-  async function joinRoom() {
-    A.init();
-    const code = $('join-code').value.trim().toUpperCase().replace(/[^A-Z]/g, '');
-    if (code.length !== 5) { setStatus('menu-status', 'Room codes are 5 letters.', true); return; }
-    if (!window.Peer) { setStatus('menu-status', 'The multiplayer library didn\'t load. Check your connection and refresh.', true); return; }
-    setStatus('menu-status', `Connecting to ${code}...`);
+  // ---------------- joining ----------------
+  $('btn-join').onclick = async () => {
+    const code = $('join-code').value.trim().toUpperCase();
+    settings.name = ($('mp-name').value.trim() || settings.name).slice(0, 16);
+    saveSettings();
+    if (code.length < 4) { $('mp-status').textContent = 'Type the room code your friend sees on their screen.'; return; }
+    $('mp-status').textContent = 'Connecting…';
     $('btn-join').disabled = true;
-    const link = new FN.Net.RemoteLink({ code, name: getName(), onMessage, onClose: (reason) => leave(reason) });
-    App.link = link;
-    App.isHost = false;
+    audio.unlock();
     try {
-      await link.open();
-      setStatus('menu-status', '');
-    } catch (err) {
-      if (App.link === link) App.link = null;
-      setStatus('menu-status', err.message, true);
-    } finally {
-      $('btn-join').disabled = false;
-    }
+      const { net, welcome } = await MC.Net.join(code, settings.name);
+      showLoading('Joining ' + (welcome.worldName || 'world') + '…');
+      settings.name = welcome.name;
+      worldRecord = null;
+      startGame({
+        guest: true, net, seed: welcome.seed, mode: (welcome.you && welcome.you.mode) || welcome.mode, difficulty: welcome.difficulty, name: welcome.worldName,
+        data: { edits: welcome.edits, tiles: welcome.tiles, time: welcome.time, spawn: welcome.spawn }, you: welcome.you,
+      });
+      $('mp-status').textContent = '';
+    } catch (e) { $('mp-status').textContent = e.message; }
+    $('btn-join').disabled = false;
+  };
+  $('join-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-join').click(); });
+  // ?join=CODE in the link jumps straight to the join screen
+  const qp = new URLSearchParams(location.search);
+  if (qp.get('join')) { $('join-code').value = qp.get('join').toUpperCase(); show('menu-multi'); }
+
+  // ---------------- settings ----------------
+  const S = [
+    ['s-dist', 'dist', (v) => `${v} chunks`], ['s-fov', 'fov', (v) => `${v}°`], ['s-sens', 'sens', (v) => `${v}%`],
+    ['s-gamma', 'gamma', (v) => (v < 10 ? 'Moody' : v > 90 ? 'Bright' : `${v}%`)], ['s-vol', 'vol', (v) => `${v}%`], ['s-scale', 'scale', (v) => `${v}%`],
+  ];
+  function fillSettings() {
+    for (const [id, key, fmt] of S) { $(id).value = settings[key]; $('v-' + id.slice(2)).textContent = fmt(settings[key]); }
+    $('s-bob').checked = settings.bob !== false;
+    $('s-invert').checked = !!settings.invert;
   }
-
-  function leave(reason) {
-    const l = App.link;
-    App.link = null;
-    if (l) { try { l.close(); } catch (e) { /* already closed */ } }
-    Object.assign(App, { host: null, isHost: false, pid: null, lobby: null, snap: null, view: null, js: null, resultAt: null });
-    A.stopAll();
-    V.Overlays.clear();
-    showScreen('menu');
-    if (reason) { setStatus('menu-status', reason, true); toast(reason, true); }
-  }
-
-  // ---------------- game lifecycle ----------------
-  function startGameView(late) {
-    const me = App.lobby && App.lobby.players.find((p) => p.pid === App.pid);
-    const role = late || !me ? 'spectator' : me.role;
-    A.stopAll();
-    Object.assign(App, { snap: null, js: null, resultAt: null, pings: [], role });
-    V.Overlays.clear();
-    V.resetCamChrome();
-    App.view = role === 'guard' ? new V.GuardView(App) : new V.SpectatorView(App);
-    showScreen('game');
-    if (late) toast('A night is already underway. You\'re spectating until the next one.');
-  }
-
-  function backToLobby() {
-    A.stopAll();
-    V.Overlays.clear();
-    Object.assign(App, { view: null, snap: null, js: null, resultAt: null });
-    showScreen('lobby');
-  }
-
-  function onSnap(s, events) {
-    if (App.screen !== 'game' || !App.view) return;
-    App.snap = s;
-    App.view.onSnap(s);
-    for (const e of events) handleEvent(e);
-  }
-
-  function handleEvent(e) {
-    switch (e.k) {
-      case 'jumpscare':
-        App.js = { who: e.who, at: App.t };
-        A.stopAll();
-        A.play('jumpscare');
-        return;
-      case 'sixam':
-        A.stopAll();
-        A.play('chime');
-        return;
-      case 'ping':
-        App.pings.push({ ...e, at: App.t });
-        if (App.pings.length > 10) App.pings.shift();
-        A.play('ping');
-        return;
-      case 'left':
-        toast(`${e.name} left the night.`);
-        return;
-      case 'end':
-        return;
-    }
-    App.view.onEvent(e);
-  }
-
-  // ---------------- lobby UI ----------------
-  function fillSelect(sel, entries) {
-    sel.innerHTML = '';
-    for (const [value, label] of entries) {
-      const o = document.createElement('option');
-      o.value = value;
-      o.textContent = label;
-      sel.appendChild(o);
-    }
-  }
-
-  function renderLobby() {
-    const L = App.lobby;
-    if (!L) return;
-    const me = L.players.find((p) => p.pid === App.pid);
-    const myRole = me ? me.role : 'spectator';
-    $('lobby-label').textContent = L.online ? 'ROOM CODE' : 'SOLO NIGHT';
-    $('lobby-code').textContent = L.online ? L.code : 'SOLO';
-    $('btn-copy').classList.toggle('hidden', !L.online);
-    $('crew-wrap').classList.toggle('hidden', !L.online);
-
-    const crew = $('crew');
-    crew.innerHTML = '';
-    const guards = L.players.filter((p) => p.role === 'guard');
-    const watchers = L.players.filter((p) => p.role !== 'guard');
-    for (const p of guards) {
-      const li = document.createElement('li');
-      const dot = document.createElement('span');
-      dot.className = 'dot';
-      dot.style.background = p.color || '#ccc';
-      li.appendChild(dot);
-      li.appendChild(document.createTextNode(p.name));
-      const tags = [p.pid === L.hostPid ? 'host' : '', p.pid === App.pid ? 'you' : ''].filter(Boolean);
-      if (tags.length) {
-        const t = document.createElement('span');
-        t.className = 'tag';
-        t.textContent = ` (${tags.join(', ')})`;
-        li.appendChild(t);
-      }
-      if (p.pid === App.pid) li.className = 'me';
-      crew.appendChild(li);
-    }
-    for (let i = guards.length; i < FN.MAX_GUARDS; i++) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = 'empty seat';
-      crew.appendChild(li);
-    }
-    $('watchers').textContent = watchers.length ? `Watching: ${watchers.map((p) => p.name + (p.pid === App.pid ? ' (you)' : '')).join(', ')}` : '';
-    const roleBtn = $('btn-role');
-    roleBtn.textContent = myRole === 'guard' ? 'Sit this one out (spectate)' : 'Join the night crew';
-    roleBtn.disabled = L.phase !== 'lobby' || (myRole !== 'guard' && guards.length >= FN.MAX_GUARDS);
-    const n = Math.max(1, guards.length);
-    const saved = Math.round((1 - FN.teamPower(n)) * 100);
-    $('crew-hint').textContent = n < 2
-      ? 'Everyone shares the office: the doors, the lights and the power. Bring friends!'
-      : `With ${n} guards the animatronics get +${FN.teamBonus(n)} AI, but the office battery drains ${saved}% slower.`;
-
-    const S = L.settings;
-    const sets = { 'set-night': String(S.night), 'set-length': S.length };
-    for (const [id, v] of Object.entries(sets)) {
-      const el = $(id);
-      el.disabled = !App.isHost;
-      if (document.activeElement !== el) el.value = v;
-    }
-    const custom = $('custom');
-    custom.classList.toggle('hidden', S.night !== 7);
-    if (!custom.children.length) {
-      for (const c of FN.CHARS) {
-        const lab = document.createElement('label');
-        lab.className = 'field';
-        lab.innerHTML = `<span>${FN.CHAR_INFO[c].short} AI (0-20)</span>`;
-        const inp = document.createElement('input');
-        inp.type = 'number';
-        inp.min = 0;
-        inp.max = 20;
-        inp.id = 'ai-' + c;
-        inp.addEventListener('change', () => sendSettings());
-        lab.appendChild(inp);
-        custom.appendChild(lab);
-      }
-    }
-    for (const c of FN.CHARS) {
-      const el = $('ai-' + c);
-      el.disabled = !App.isHost;
-      if (document.activeElement !== el) el.value = S.custom[c];
-    }
-    $('btn-start').classList.toggle('hidden', !App.isHost);
-    const hasGuard = L.players.some((p) => p.role === 'guard');
-    $('btn-start').disabled = !hasGuard || L.phase !== 'lobby';
-    if (!App.isHost) setStatus('lobby-status', L.phase === 'lobby' ? 'Waiting for the host to start the night...' : 'A night is in progress...');
-    else setStatus('lobby-status', hasGuard ? '' : 'Someone needs to be on the night crew.');
-  }
-
-  function sendSettings() {
-    if (!App.isHost) return;
-    const custom = {};
-    for (const c of FN.CHARS) custom[c] = Number($('ai-' + c).value) || 0;
-    App.send({
-      t: 'settings',
-      settings: { night: Number($('set-night').value), length: $('set-length').value, custom },
+  for (const [id, key, fmt] of S) {
+    $(id).addEventListener('input', () => {
+      settings[key] = +$(id).value;
+      $('v-' + id.slice(2)).textContent = fmt(settings[key]);
+      if (key === 'vol') audio.setVolume(settings.vol / 100);
+      if (key === 'dist' && game.world) { game.world.renderDist = settings.dist; game.world.lastCenter = null; }
+      saveSettings();
     });
   }
+  $('s-bob').onchange = () => { settings.bob = $('s-bob').checked; saveSettings(); };
+  $('s-invert').onchange = () => { settings.invert = $('s-invert').checked; saveSettings(); };
+  $('btn-settings-done').onclick = () => show(game.running ? 'menu-pause' : 'menu-title');
 
-  function inviteLink() {
-    const u = new URL(location.href);
-    u.searchParams.set('join', App.lobby.code);
-    return u.toString();
-  }
-
-  // ---------------- render loop ----------------
-  const stage = $('stage');
-  const viewport = $('viewport');
-  let last = performance.now();
-  let fit = { s: 1, x: 0, y: 0 };
-  let menuEyes = { dark: false, until: 0 };
-
-  // Scale the 1280x720 stage to fit the window, letterboxed.
-  function fitStage() {
-    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
-    fit = { s, x: (window.innerWidth - W * s) / 2, y: (window.innerHeight - H * s) / 2 };
-    stage.style.transform = `translate(${fit.x}px, ${fit.y}px) scale(${s})`;
-  }
-
-  // Title screen: Freddy staring out of the static, eyes flickering.
-  function drawBackdrop(t) {
-    if (t > menuEyes.until) menuEyes = { dark: Math.random() < 0.18, until: t + (Math.random() < 0.2 ? 0.12 : 0.6 + Math.random() * 2) };
-    const head = $('bd-head');
-    U.img(head, L.headName('freddy', 'shut', menuEyes.dark ? 'dark' : 'normal'));
-    const k = 1.7 / L.HEAD.scale;
-    U.set(head, 'transform', `translate(${(900 + Math.sin(t * 0.4) * 10 - L.HEAD.cx).toFixed(1)}px, ${430 - L.HEAD.cy}px) scale(${k}) rotate(${(Math.sin(t * 0.3) * 0.03).toFixed(3)}rad)`);
-    U.set($('bd-shade'), 'opacity', Math.random() < 0.06 ? '0.9' : '0.62');
-    U.set($('bd-noise'), 'opacity', (0.12 + Math.random() * 0.06).toFixed(2));
-  }
-
-  function drawGame(dt) {
-    const snap = App.snap;
-    const t = App.t;
-    const scare = App.js && t - App.js.at < FN.TUNE.jumpscareTime + 0.1;
-    U.vis($('jumpscare'), !!scare);
-    if (scare) { V.Overlays.jumpscare(App.js.who, t - App.js.at, t); return; }
-    if (snap.result) {
-      if (App.resultAt == null) App.resultAt = t;
-      const k = t - App.resultAt;
-      A.loop('heavystatic', snap.result.winner === 'anims' && k < 2.2, 0.5);
-      App.resultHits = [];
-      V.Overlays.result(snap.result, k, App, App.resultHits);
-      return;
-    }
-    U.vis($('result'), false);
-    App.view.update(dt);
-    App.view.draw(t);
-    V.Overlays.intro(snap);
-  }
-
-  function frame(now) {
-    const dt = Math.min(0.1, (now - last) / 1000);
-    last = now;
-    App.t = now / 1000;
-    try {
-      const inGame = App.screen === 'game' && App.view;
-      U.vis($('backdrop'), !inGame);
-      if (inGame) {
-        U.vis($('loading'), !App.snap);
-        if (App.snap) drawGame(dt);
-      } else drawBackdrop(App.t);
-    } catch (e) {
-      console.error(e);
-    }
-    requestAnimationFrame(frame);
-  }
-
-  // ---------------- input ----------------
-  function toGame(e) {
-    return [(e.clientX - fit.x) / fit.s, (e.clientY - fit.y) / fit.s];
-  }
-
-  function dispatch(type, e) {
-    if (App.screen !== 'game' || !App.snap || !App.view) return;
-    const [x, y] = toGame(e);
-    if (App.snap.result) {
-      if (type === 'up') {
-        const h = V.hitTest(App.resultHits, x, y);
-        if (h && h.id === 'lobby') App.send({ t: 'lobby' });
-      }
-      return;
-    }
-    if (App.js) return;
-    App.view.pointer(type, x, y, e);
-  }
-
-  viewport.addEventListener('pointerdown', (e) => { A.init(); dispatch('down', e); });
-  viewport.addEventListener('pointermove', (e) => dispatch('move', e));
-  viewport.addEventListener('pointerup', (e) => dispatch('up', e));
-  viewport.addEventListener('pointerleave', (e) => dispatch('leave', e));
-  viewport.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  window.addEventListener('keydown', (e) => {
-    A.init();
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
-    if (App.screen !== 'game' || !App.view || !App.snap || App.snap.result || App.js) return;
-    if (e.key === 'm' || e.key === 'M') { toggleMute(); return; }
-    if (e.repeat) return;
-    if (App.view.key(e)) e.preventDefault();
+  // Esc closes sub menus
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (current === 'menu-pause') { if (performance.now() - pausedAt > 400) $('btn-resume').click(); return; }
+    if (current && !game.running && current !== 'menu-title' && current !== 'menu-error') show('menu-title');
+    else if (current === 'menu-settings' && game.running) show('menu-pause');
   });
 
-  function toggleMute() {
-    A.setMuted(!A.isMuted());
-    $('btn-mute').classList.toggle('off', A.isMuted());
-  }
-
-  // ---------------- DOM wiring ----------------
-  fillSelect($('set-length'), Object.entries(FN.LENGTHS).map(([k, v]) => [k, v.label]));
-  for (const id of ['set-night', 'set-length']) $(id).addEventListener('change', sendSettings);
-
-  try { $('name').value = localStorage.getItem('fnaf-name') || ''; } catch (e) { /* storage blocked */ }
-  const q = new URLSearchParams(location.search);
-  if (q.get('join')) {
-    $('join-code').value = q.get('join').toUpperCase().slice(0, 5);
-    setStatus('menu-status', 'Enter your name and press Join.');
-  }
-
-  $('btn-solo').addEventListener('click', () => createRoom(false));
-  $('btn-host').addEventListener('click', () => createRoom(true));
-  $('btn-join').addEventListener('click', joinRoom);
-  $('join-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
-  $('btn-help').addEventListener('click', () => $('help').classList.toggle('hidden'));
-  $('btn-help-close').addEventListener('click', () => $('help').classList.add('hidden'));
-  $('btn-leave').addEventListener('click', () => leave());
-  $('btn-start').addEventListener('click', () => { A.init(); App.send({ t: 'start' }); });
-  $('btn-role').addEventListener('click', () => {
-    const me = App.lobby && App.lobby.players.find((p) => p.pid === App.pid);
-    App.send({ t: 'role', role: me && me.role === 'guard' ? 'spectator' : 'guard' });
-  });
-  $('btn-copy').addEventListener('click', async () => {
-    const link = inviteLink();
-    try {
-      await navigator.clipboard.writeText(link);
-      toast('Invite link copied!');
-    } catch (e) {
-      window.prompt('Copy this invite link:', link);
-    }
-  });
-  $('btn-mute').addEventListener('click', toggleMute);
-  $('btn-mute').classList.toggle('off', A.isMuted());
-  $('btn-full').addEventListener('click', () => {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
-  });
-  $('btn-quit').addEventListener('click', () => {
-    if (window.confirm(App.isHost && App.lobby && App.lobby.online ? 'Leave? This closes the room for everyone.' : 'Leave this game?')) leave();
-  });
-  window.addEventListener('resize', checkRotate);
-  window.addEventListener('beforeunload', (e) => {
-    if (App.isHost && App.lobby && App.lobby.online && App.lobby.players.length > 1) { e.preventDefault(); e.returnValue = ''; }
-  });
-
-  V.Scene.init();
-  fitStage();
-  window.addEventListener('resize', fitStage);
-  FN.Assets.onProgress((done, total) => {
-    $('load-status').textContent = done < total ? `Loading the pizzeria... ${Math.round((100 * done) / total)}%` : '';
-  });
-  requestAnimationFrame(frame);
-})();
+  show('menu-title');
+})(globalThis);

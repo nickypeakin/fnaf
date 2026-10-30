@@ -1,365 +1,152 @@
-// Every sound is synthesized with WebAudio, so there are no audio files to ship.
-(function () {
+// Synthesized sound effects (WebAudio): block hits and breaks per material, footsteps, pickups,
+// hurt, eating, explosions, and simple mob voices. Positional sounds fade with distance.
+(function (G) {
   'use strict';
-  const FN = window.FN;
+  const MC = G.MC;
 
-  let ctx = null;
-  let master = null;
-  let noiseBuf = null;
-  const loops = {};
-  let muted = false;
-  try { muted = localStorage.getItem('fnaf-muted') === '1'; } catch (e) { /* storage blocked */ }
+  class Audio {
+    constructor() {
+      this.ctx = null;
+      this.volume = 0.7;
+      this.listener = { x: 0, y: 0, z: 0, yaw: 0 };
+      this.noiseBuf = null;
+    }
 
-  let failed = false;
-  function init() {
-    if (failed) return;
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); return; }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    try {
-      setup(AC);
-    } catch (e) {
-      // Some privacy tools block or break Web Audio; the game just runs silently then.
-      console.warn('sound unavailable:', e);
-      failed = true;
-      ctx = null;
+    unlock() {
+      if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+      const AC = G.AudioContext || G.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.volume;
+      this.master.connect(this.ctx.destination);
+      const n = this.ctx.sampleRate;
+      this.noiseBuf = this.ctx.createBuffer(1, n, n);
+      const d = this.noiseBuf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    }
+    setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; }
+
+    // A gain+pan node for a sound at a world position (or at the listener when pos is null).
+    out(pos, vol) {
+      const c = this.ctx;
+      const g = c.createGain();
+      let v = vol;
+      let pan = 0;
+      if (pos) {
+        const L = this.listener;
+        const dx = pos.x - L.x, dy = pos.y - L.y, dz = pos.z - L.z;
+        const d = Math.hypot(dx, dy, dz);
+        if (d > 32) return null;
+        v *= Math.max(0, 1 - d / 32) ** 1.4;
+        // right vector of the listener: (cos yaw, 0, -sin yaw)
+        if (d > 0.5) pan = MC.clamp((dx * Math.cos(L.yaw) - dz * Math.sin(L.yaw)) / d, -1, 1) * 0.7;
+      }
+      if (v < 0.01) return null;
+      g.gain.value = v;
+      if (c.createStereoPanner) {
+        const p = c.createStereoPanner();
+        p.pan.value = pan;
+        g.connect(p); p.connect(this.master);
+      } else g.connect(this.master);
+      return g;
+    }
+
+    noise(dest, t0, dur, freq, q, type = 'bandpass', attack = 0.003) {
+      const c = this.ctx;
+      const src = c.createBufferSource();
+      src.buffer = this.noiseBuf;
+      const f = c.createBiquadFilter();
+      f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(1, t0 + attack);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      src.connect(f); f.connect(g); g.connect(dest);
+      src.start(t0, Math.random() * 0.5);
+      src.stop(t0 + dur + 0.02);
+      return f;
+    }
+
+    tone(dest, t0, dur, f0, f1, type = 'sine', vol = 1) {
+      const c = this.ctx;
+      const o = c.createOscillator();
+      o.type = type;
+      o.frequency.setValueAtTime(f0, t0);
+      if (f1) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+      const g = c.createGain();
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      o.connect(g); g.connect(dest);
+      o.start(t0); o.stop(t0 + dur + 0.02);
+    }
+
+    // Material sounds: kind = 'break' | 'place' | 'hit' | 'step'
+    block(material, kind, pos) {
+      if (!this.ctx) return;
+      const vol = kind === 'step' ? 0.18 : kind === 'hit' ? 0.22 : 0.55;
+      const d = this.out(pos, vol);
+      if (!d) return;
+      const t = this.ctx.currentTime;
+      const dur = kind === 'break' ? 0.22 : kind === 'place' ? 0.12 : 0.07;
+      const r = 0.85 + Math.random() * 0.3;
+      switch (material) {
+        case 'wood': this.noise(d, t, dur, 520 * r, 4); this.tone(d, t, dur * 0.8, 180 * r, 120, 'triangle', 0.5); break;
+        case 'gravel': case 'sand': this.noise(d, t, dur * 1.2, (material === 'sand' ? 2600 : 1400) * r, 0.8); break;
+        case 'grass': this.noise(d, t, dur, 3200 * r, 0.6, 'highpass'); break;
+        case 'glass':
+          if (kind === 'break') { for (let i = 0; i < 4; i++) this.tone(d, t + i * 0.02, 0.25, 2200 + Math.random() * 2400, null, 'sine', 0.25); }
+          else this.tone(d, t, 0.08, 1800 * r, null, 'sine', 0.3);
+          break;
+        case 'snow': case 'cloth': this.noise(d, t, dur * 1.1, 900 * r, 0.5, 'lowpass'); break;
+        case 'slime': this.tone(d, t, 0.15, 220 * r, 120, 'sine', 0.6); this.noise(d, t, 0.08, 700, 1, 'lowpass'); break;
+        default: this.noise(d, t, dur, 1100 * r, 1.5); this.tone(d, t, dur * 0.6, 95 * r, 70, 'square', 0.12);
+      }
+    }
+
+    play(name, pos, vol = 1) {
+      if (!this.ctx) return;
+      const d = this.out(pos, vol);
+      if (!d) return;
+      const t = this.ctx.currentTime;
+      const r = 0.9 + Math.random() * 0.2;
+      switch (name) {
+        case 'pop': this.tone(d, t, 0.09, 900 * r, 1500, 'sine', 0.35); break;
+        case 'click': this.tone(d, t, 0.05, 1200, 900, 'square', 0.15); break;
+        case 'hurt': this.tone(d, t, 0.2, 420 * r, 180, 'sawtooth', 0.35); this.noise(d, t, 0.1, 700, 1); break;
+        case 'eat': for (let i = 0; i < 3; i++) this.noise(d, t + i * 0.11, 0.07, 1500 * r, 1.2); break;
+        case 'burp': this.tone(d, t, 0.25, 160, 90, 'sawtooth', 0.3); break;
+        case 'splash': this.noise(d, t, 0.45, 1300, 0.5, 'lowpass', 0.02); break;
+        case 'swim': this.noise(d, t, 0.25, 900, 0.6, 'lowpass', 0.03); break;
+        case 'explode': this.noise(d, t, 1.4, 260, 0.4, 'lowpass', 0.005); this.tone(d, t, 0.9, 70, 30, 'sine', 0.9); break;
+        case 'fuse': this.noise(d, t, 1.2, 4500, 2, 'bandpass', 0.05); break;
+        case 'door': this.noise(d, t, 0.18, 380 * r, 3); this.tone(d, t, 0.15, 140, 90, 'triangle', 0.4); break;
+        case 'chest': this.tone(d, t, 0.3, 130 * r, 90, 'triangle', 0.5); this.noise(d, t, 0.25, 500, 2); break;
+        case 'fizz': this.noise(d, t, 0.5, 3000, 0.6, 'highpass', 0.02); break;
+        case 'levelup': [523, 659, 784, 1047].forEach((f, i) => this.tone(d, t + i * 0.07, 0.3, f, null, 'triangle', 0.3)); break;
+        case 'orb': this.tone(d, t, 0.12, 1400 * r * (1 + Math.random() * 0.5), null, 'sine', 0.2); break;
+        case 'bow': this.noise(d, t, 0.25, 900, 2); this.tone(d, t, 0.15, 300, 600, 'triangle', 0.2); break;
+        case 'arrowhit': this.noise(d, t, 0.08, 1700, 2); break;
+        case 'attack': this.noise(d, t, 0.08, 1100 * r, 0.8); break;
+        case 'crit': this.noise(d, t, 0.12, 2400 * r, 0.8); this.tone(d, t, 0.1, 900, 400, 'square', 0.12); break;
+        case 'amethyst': [1568, 2093, 2637].forEach((f, i) => this.tone(d, t + i * 0.03, 0.5, f * r, null, 'sine', 0.18)); break;
+        case 'zombie': this.tone(d, t, 0.6, 110 * r, 80, 'sawtooth', 0.35); this.noise(d, t, 0.5, 300, 1, 'lowpass'); break;
+        case 'skeleton': for (let i = 0; i < 3; i++) this.noise(d, t + i * 0.08, 0.05, 2600, 4); break;
+        case 'spider': this.noise(d, t, 0.35, 1800, 6, 'bandpass', 0.05); break;
+        case 'creeper': this.noise(d, t, 0.6, 3200, 3, 'bandpass', 0.1); break;
+        case 'pig': this.tone(d, t, 0.18, 300 * r, 220, 'sawtooth', 0.25); this.tone(d, t + 0.2, 0.15, 280 * r, 200, 'sawtooth', 0.2); break;
+        case 'cow': this.tone(d, t, 0.8, 150 * r, 110, 'sawtooth', 0.3); break;
+        case 'sheep': for (let i = 0; i < 4; i++) this.tone(d, t + i * 0.08, 0.09, 420 * r, 380, 'sawtooth', 0.22); break;
+        case 'chicken': this.tone(d, t, 0.08, 1300 * r, 900, 'square', 0.12); this.tone(d, t + 0.12, 0.08, 1500 * r, 1000, 'square', 0.1); break;
+        case 'goat': this.tone(d, t, 0.45, 340 * r, 260, 'sawtooth', 0.25); break;
+        case 'axolotl': this.tone(d, t, 0.15, 1800 * r, 2400, 'sine', 0.15); break;
+        case 'squid': this.noise(d, t, 0.3, 600, 1, 'lowpass', 0.05); break;
+        case 'player': this.tone(d, t, 0.15, 500 * r, 300, 'sine', 0.2); break;
+        default: this.tone(d, t, 0.1, 600, 400, 'sine', 0.2);
+      }
     }
   }
 
-  function setup(AC) {
-    ctx = new AC();
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -10;
-    comp.ratio.value = 6;
-    master = ctx.createGain();
-    master.gain.value = muted ? 0 : 0.9;
-    master.connect(comp).connect(ctx.destination);
-    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  }
-
-  const now = () => ctx.currentTime;
-
-  function out(pan = 0, vol = 1) {
-    const g = ctx.createGain();
-    g.gain.value = vol;
-    if (pan && ctx.createStereoPanner) {
-      const p = ctx.createStereoPanner();
-      p.pan.value = pan;
-      g.connect(p).connect(master);
-    } else g.connect(master);
-    return g;
-  }
-
-  function noise(dest, { t = now(), dur = 0.3, type = 'lowpass', freq = 1000, q = 1, vol = 0.5, attack = 0.005, loop = false } = {}) {
-    const src = ctx.createBufferSource();
-    src.buffer = noiseBuf;
-    src.loop = loop || dur > 1.9;
-    const f = ctx.createBiquadFilter();
-    f.type = type;
-    f.frequency.value = freq;
-    f.Q.value = q;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vol, t + attack);
-    if (!loop) g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(f).connect(g).connect(dest);
-    src.start(t, Math.random() * 1.5);
-    if (!loop) src.stop(t + dur + 0.05);
-    return { src, f, g };
-  }
-
-  function tone(dest, { t = now(), dur = 0.3, type = 'sine', freq = 440, to = null, vol = 0.3, attack = 0.005, release = null } = {}) {
-    const o = ctx.createOscillator();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t);
-    if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vol, t + attack);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + (release || dur));
-    o.connect(g).connect(dest);
-    o.start(t);
-    o.stop(t + (release || dur) + 0.05);
-    return o;
-  }
-
-  function distortion(amount) {
-    const ws = ctx.createWaveShaper();
-    const n = 1024;
-    const curve = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const x = (i / n) * 2 - 1;
-      curve[i] = ((1 + amount) * x) / (1 + amount * Math.abs(x));
-    }
-    ws.curve = curve;
-    return ws;
-  }
-
-  // ---- one-shot sounds ----
-  const SFX = {
-    door(o) {
-      const d = out(o.pan, 0.9);
-      noise(d, { dur: 0.35, freq: 500, vol: 0.6 });
-      tone(d, { dur: 0.45, freq: 110, to: 40, vol: 0.7 });
-      tone(d, { t: now() + 0.02, dur: 0.12, type: 'square', freq: 220, to: 150, vol: 0.12 });
-    },
-    dud(o) {
-      const d = out(o.pan, 0.6);
-      tone(d, { dur: 0.08, type: 'square', freq: 160, vol: 0.2 });
-      tone(d, { t: now() + 0.11, dur: 0.08, type: 'square', freq: 120, vol: 0.2 });
-    },
-    click() { tone(out(0, 0.5), { dur: 0.04, type: 'square', freq: 1800, vol: 0.12 }); },
-    blip() {
-      const d = out(0, 0.5);
-      tone(d, { dur: 0.05, type: 'square', freq: 900, vol: 0.12 });
-      noise(d, { dur: 0.18, type: 'highpass', freq: 2500, vol: 0.25 });
-    },
-    camUp() {
-      const d = out(0, 0.6);
-      noise(d, { dur: 0.25, type: 'bandpass', freq: 1800, q: 0.7, vol: 0.35, attack: 0.05 });
-      tone(d, { dur: 0.06, type: 'square', freq: 600, vol: 0.06 });
-    },
-    camDown() {
-      const d = out(0, 0.6);
-      noise(d, { dur: 0.25, type: 'bandpass', freq: 900, q: 0.7, vol: 0.35, attack: 0.05 });
-    },
-    steps(o) {
-      const d = out(o.pan, o.vol || 0.5);
-      for (let i = 0; i < 4; i++) {
-        const t = now() + i * (0.34 + Math.random() * 0.06);
-        tone(d, { t, dur: 0.18, freq: 70 + Math.random() * 15, to: 40, vol: 0.55 });
-        noise(d, { t, dur: 0.09, freq: 700, vol: 0.25 });
-      }
-    },
-    run() {
-      const d = out(-0.8, 0.8);
-      for (let i = 0; i < 12; i++) {
-        const t = now() + 0.3 + i * 0.18;
-        const v = 0.15 + (i / 12) * 0.75;
-        tone(d, { t, dur: 0.12, freq: 85, to: 45, vol: v });
-        noise(d, { t, dur: 0.06, freq: 1100, vol: v * 0.4 });
-      }
-    },
-    bang() {
-      const d = out(-0.8, 1);
-      for (let i = 0; i < 4; i++) {
-        const t = now() + i * 0.24 + Math.random() * 0.04;
-        noise(d, { t, dur: 0.3, freq: 400, vol: 0.9 });
-        tone(d, { t, dur: 0.35, freq: 140, to: 60, vol: 0.8 });
-        tone(d, { t, dur: 0.5, type: 'triangle', freq: 523, to: 500, vol: 0.06 });
-      }
-    },
-    kitchen(o) {
-      const d = out(0.5, o.vol || 0.35);
-      const n = 2 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < n; i++) {
-        const t = now() + i * (0.08 + Math.random() * 0.25);
-        const base = 500 + Math.random() * 900;
-        for (const r of [1, 1.47, 2.09, 2.76]) tone(d, { t, dur: 0.5 + Math.random() * 0.4, type: 'triangle', freq: base * r, vol: 0.06 });
-        noise(d, { t, dur: 0.08, type: 'highpass', freq: 3000, vol: 0.2 });
-      }
-    },
-    laugh(o) {
-      const d = out(0.3, o.vol || 0.45);
-      const shaper = distortion(20);
-      const f = ctx.createBiquadFilter();
-      f.type = 'bandpass';
-      f.frequency.value = 600;
-      f.Q.value = 2;
-      shaper.connect(f).connect(d);
-      for (let i = 0; i < 3; i++) {
-        const t = now() + i * 0.26;
-        const o2 = ctx.createOscillator();
-        o2.type = 'sawtooth';
-        o2.frequency.setValueAtTime(150 - i * 12, t);
-        o2.frequency.exponentialRampToValueAtTime(95 - i * 8, t + 0.2);
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.5, t + 0.03);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-        o2.connect(g).connect(shaper);
-        o2.start(t);
-        o2.stop(t + 0.3);
-      }
-    },
-    groan(o) {
-      const d = out(o.pan, 0.35);
-      const f = ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = 400;
-      f.connect(d);
-      const o2 = ctx.createOscillator();
-      o2.type = 'sawtooth';
-      const t = now();
-      o2.frequency.setValueAtTime(75, t);
-      o2.frequency.linearRampToValueAtTime(52, t + 1.6);
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 7;
-      const lg = ctx.createGain();
-      lg.gain.value = 4;
-      lfo.connect(lg).connect(o2.frequency);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.6, t + 0.3);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
-      o2.connect(g).connect(f);
-      o2.start(t); lfo.start(t);
-      o2.stop(t + 1.9); lfo.stop(t + 1.9);
-    },
-    jumpscare() {
-      const d = out(0, 1.4);
-      const shaper = distortion(60);
-      shaper.connect(d);
-      const t = now();
-      for (const base of [380, 523, 610, 870]) {
-        const o2 = ctx.createOscillator();
-        o2.type = 'sawtooth';
-        o2.frequency.setValueAtTime(base, t);
-        for (let i = 1; i < 16; i++) o2.frequency.setValueAtTime(base * (0.8 + Math.random() * 0.5), t + i * 0.09);
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0.35, t);
-        g.gain.setValueAtTime(0.35, t + 1.2);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 1.6);
-        o2.connect(g).connect(shaper);
-        o2.start(t);
-        o2.stop(t + 1.7);
-      }
-      noise(d, { dur: 1.6, type: 'bandpass', freq: 2500, q: 0.5, vol: 0.9, attack: 0.001 });
-    },
-    powerout() {
-      const d = out(0, 0.9);
-      tone(d, { dur: 1.6, type: 'sawtooth', freq: 240, to: 30, vol: 0.25 });
-      tone(d, { dur: 0.08, type: 'square', freq: 90, vol: 0.4 });
-      noise(d, { dur: 0.6, freq: 300, vol: 0.5 });
-    },
-    ping() {
-      const d = out(0, 0.6);
-      tone(d, { dur: 0.12, type: 'square', freq: 880, vol: 0.12 });
-      tone(d, { t: now() + 0.13, dur: 0.18, type: 'square', freq: 1320, vol: 0.12 });
-    },
-    honk() { tone(out(0, 0.6), { dur: 0.16, type: 'square', freq: 370, to: 330, vol: 0.25 }); },
-    chime() {
-      const d = out(0, 0.8);
-      const notes = [1046, 1318, 1568, 2093, 1568, 2093];
-      notes.forEach((f, i) => {
-        const t = now() + i * 0.45;
-        tone(d, { t, dur: 2.2, type: 'sine', freq: f, vol: 0.25 });
-        tone(d, { t, dur: 1.2, type: 'sine', freq: f * 2.01, vol: 0.06 });
-      });
-      // A crowd of kids cheering, faked with swept band-passed noise.
-      for (let i = 0; i < 3; i++) {
-        const t = now() + 2.8 + i * 0.5;
-        const n = noise(d, { t, dur: 1.4, type: 'bandpass', freq: 900, q: 3, vol: 0.4, attack: 0.15 });
-        n.f.frequency.setValueAtTime(800, t);
-        n.f.frequency.linearRampToValueAtTime(1800, t + 0.4);
-        n.f.frequency.linearRampToValueAtTime(1200, t + 1.3);
-      }
-    },
-    tick() { tone(out(0, 0.4), { dur: 0.03, type: 'square', freq: 2400, vol: 0.08 }); },
-  };
-
-  function play(name, o = {}) {
-    if (!ctx || muted || !SFX[name]) return;
-    try { SFX[name](o); } catch (e) { console.warn('sfx', name, e); }
-  }
-
-  // ---- loops: started/stopped by name, gain ramps for smooth fades ----
-  function makeLoop(name) {
-    const d = out(0, 1);
-    const g = d;
-    g.gain.value = 0;
-    const parts = [];
-    if (name === 'fan') {
-      const n = noise(d, { loop: true, freq: 380, q: 0.5, vol: 0.16, attack: 0.01 });
-      parts.push(n.src);
-      const o = ctx.createOscillator(); o.frequency.value = 58; const og = ctx.createGain(); og.gain.value = 0.03;
-      o.connect(og).connect(d); o.start(); parts.push(o);
-    } else if (name === 'ambience') {
-      for (const f of [55, 58.3, 110.4]) {
-        const o = ctx.createOscillator(); o.frequency.value = f; const og = ctx.createGain(); og.gain.value = 0.05;
-        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.07 + Math.random() * 0.1;
-        const lg = ctx.createGain(); lg.gain.value = 0.04; lfo.connect(lg).connect(og.gain);
-        o.connect(og).connect(d); o.start(); lfo.start(); parts.push(o, lfo);
-      }
-      const n = noise(d, { loop: true, freq: 120, vol: 0.12 });
-      parts.push(n.src);
-    } else if (name === 'buzz') {
-      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 120;
-      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1200; f.Q.value = 3;
-      const og = ctx.createGain(); og.gain.value = 0.08;
-      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 9;
-      const lg = ctx.createGain(); lg.gain.value = 0.03; lfo.connect(lg).connect(og.gain);
-      o.connect(f).connect(og).connect(d); o.start(); lfo.start(); parts.push(o, lfo);
-    } else if (name === 'static') {
-      const n = noise(d, { loop: true, type: 'bandpass', freq: 3200, q: 0.6, vol: 0.12 });
-      parts.push(n.src);
-    } else if (name === 'heavystatic') {
-      const n = noise(d, { loop: true, type: 'highpass', freq: 1200, vol: 0.3 });
-      parts.push(n.src);
-    } else if (name === 'music') {
-      const stop = musicBox(d);
-      parts.push({ stop });
-    } else if (name === 'tension') {
-      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 41;
-      const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = 43.5;
-      const og = ctx.createGain(); og.gain.value = 0.18;
-      o.connect(og); o2.connect(og); og.connect(d); o.start(); o2.start(); parts.push(o, o2);
-    }
-    return { g, parts };
-  }
-
-  function loop(name, on, vol = 1, pan = 0) {
-    if (!ctx) return;
-    let l = loops[name];
-    if (on && !l) l = loops[name] = makeLoop(name);
-    if (!l) return;
-    const target = on ? vol : 0;
-    l.g.gain.cancelScheduledValues(now());
-    l.g.gain.setTargetAtTime(target, now(), 0.08);
-    if (!on) {
-      delete loops[name];
-      setTimeout(() => {
-        for (const p of l.parts) { try { p.stop(); } catch (e) { /* already stopped */ } }
-        try { l.g.disconnect(); } catch (e) { /* already disconnected */ }
-      }, 500);
-    }
-  }
-
-  function stopAll() { for (const k of Object.keys(loops)) loop(k, false); }
-
-  // Bizet's "Toreador" refrain (public domain) as a tinny music box.
-  function musicBox(dest) {
-    const Q = 0.3;
-    const N = { C4: 261.6, D4: 293.7, F4: 349.2, G4: 392, A4: 440, Bb4: 466.2, C5: 523.3, D5: 587.3 };
-    const tune = [
-      ['C5', 1], ['D5', 0.5], ['C5', 0.5], ['A4', 1], ['A4', 1], ['A4', 0.5], ['G4', 0.5], ['A4', 0.5], ['Bb4', 0.5], ['A4', 2],
-      ['Bb4', 1.5], ['G4', 0.5], ['C5', 1], ['A4', 1], ['F4', 1], ['D4', 0.5], ['G4', 0.5], ['C4', 2],
-      ['G4', 1], ['C5', 0.5], ['Bb4', 0.5], ['A4', 1], ['G4', 1], ['A4', 0.5], ['Bb4', 0.5], ['A4', 1], ['G4', 2],
-    ];
-    let stopped = false;
-    let timer = null;
-    const playOnce = () => {
-      if (stopped) return;
-      let t = now() + 0.05;
-      for (const [n, len] of tune) {
-        const f = N[n] * 2;
-        tone(dest, { t, dur: len * Q * 2.5, type: 'sine', freq: f, vol: 0.18 });
-        tone(dest, { t, dur: len * Q, type: 'triangle', freq: f * 3, vol: 0.03 });
-        t += len * Q;
-      }
-      timer = setTimeout(playOnce, (t - now()) * 1000 + 600);
-    };
-    playOnce();
-    return () => { stopped = true; clearTimeout(timer); };
-  }
-
-  function setMuted(m) {
-    muted = m;
-    try { localStorage.setItem('fnaf-muted', m ? '1' : '0'); } catch (e) { /* storage blocked */ }
-    if (master) master.gain.setTargetAtTime(m ? 0 : 0.9, now(), 0.05);
-  }
-
-  FN.Audio = { init, play, loop, stopAll, setMuted, isMuted: () => muted };
-})();
+  MC.Audio = Audio;
+})(globalThis);

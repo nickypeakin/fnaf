@@ -1,360 +1,328 @@
-// Networking. One browser hosts the room and runs the simulation; everybody
-// else connects to it peer-to-peer (WebRTC via PeerJS). The host's own player
-// talks to the room through a LocalLink, so the UI code is identical for
-// hosts and joiners.
+// Multiplayer over WebRTC (PeerJS). One player hosts their world; friends join with a room code.
 //
-// Protocol (all JSON):
-//   client -> host: hello {name, v}, role {role: guard|spectator}, settings {settings}, start, lobby, in {...input}
-//   host -> client: welcome {pid, code}, lobby {...}, start {}, snap {s, ev}, msg {text}, bye {reason}
-(function () {
+// The host is in charge of the world: block physics, mobs, items, furnaces and chests. Guests
+// generate terrain themselves from the shared seed, run their own movement, and send their
+// block edits and actions to the host, which applies them and passes them on to everyone else.
+(function (G) {
   'use strict';
-  const FN = window.FN;
-  const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const MC = G.MC;
+  const PREFIX = 'blockcraft-v1-';
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-  function makeCode() {
-    let s = '';
-    for (let i = 0; i < 5; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
-    return s;
-  }
-
-  // Optional self-hosted signalling server: ?peerhost=example.com&peerport=9000&peerpath=/&peersecure=0
+  function makeCode() { let s = ''; for (let i = 0; i < 5; i++) s += ALPHABET[Math.floor(Math.random() * ALPHABET.length)]; return s; }
   function peerOptions() {
-    const q = new URLSearchParams(location.search);
     const o = { debug: 1 };
-    if (q.get('peerhost')) {
-      o.host = q.get('peerhost');
-      o.port = Number(q.get('peerport') || 443);
-      o.path = q.get('peerpath') || '/';
-      o.secure = q.get('peersecure') !== '0';
-    }
+    // tests (and self-hosters) can point at their own PeerJS server: ?peer=host:port
+    const q = new URLSearchParams(location.search).get('peer');
+    if (q) { const [host, port] = q.split(':'); Object.assign(o, { host, port: +port || 9000, path: '/', secure: false }); }
     return o;
   }
 
-  function cleanName(n) {
-    return String(n || '').replace(/[^\w .'\-!?]/g, '').trim().slice(0, 16) || 'Player';
-  }
-
-  // Timers in a worker keep ticking at full speed when the host's tab is in the background.
-  function makeTicker(ms, fn) {
-    let interval = null;
-    let worker = null;
-    let url = null;
-    const fallback = () => {
-      if (worker) { worker.terminate(); worker = null; }
-      if (!interval) interval = setInterval(fn, ms);
-    };
-    try {
-      url = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${ms});`], { type: 'text/javascript' }));
-      worker = new Worker(url);
-      worker.onmessage = fn;
-      worker.onerror = fallback; // some browsers refuse blob workers (e.g. file:// pages); that only shows up async
-    } catch (e) {
-      fallback();
-    }
-    return {
-      stop() {
-        if (worker) worker.terminate();
-        if (interval) clearInterval(interval);
-        if (url) URL.revokeObjectURL(url);
-        worker = null;
-        interval = null;
-      },
-    };
-  }
-
-  const DEFAULT_SETTINGS = {
-    night: 1, length: 'classic',
-    custom: { freddy: 10, bonnie: 10, chica: 10, foxy: 10 },
-  };
-
-  class RoomHost {
-    // onLocal(msg) delivers messages to the host's own UI.
-    constructor({ name, online, onLocal, onStatus }) {
-      this.online = online;
-      this.onLocal = onLocal;
-      this.onStatus = onStatus || (() => {});
-      this.code = online ? makeCode() : null;
-      this.players = [];
-      this.nextId = 1;
-      this.phase = 'lobby';
-      this.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
-      this.sim = null;
-      this.ticker = null;
-      this.peer = null;
-      this.localPid = 'p0';
-      this.players.push({ pid: this.localPid, name: cleanName(name), role: 'guard', conn: null });
+  class Net {
+    constructor(peer, isHost) {
+      this.peer = peer;
+      this.isHost = isHost;
+      this.id = peer.id;
+      this.conns = new Map(); // peer id -> {conn, name}
+      this.outEdits = [];
+      this.timers = { pos: 0, ents: 0, time: 0, pstate: 0, edits: 0 };
+      this.saved = {}; // name -> player data (host)
+      this.game = null;
     }
 
-    open() {
-      if (!this.online) {
-        this.sendTo(this.localPid, { t: 'welcome', pid: this.localPid, code: null });
-        this.broadcastLobby();
-        return Promise.resolve();
-      }
+    // ---------------- setup ----------------
+    static host(code, savedPlayers) {
       return new Promise((resolve, reject) => {
-        let tries = 0;
-        const attempt = () => {
-          const peer = new window.Peer(FN.PEER_PREFIX + this.code, peerOptions());
-          let opened = false;
+        if (!G.Peer) { reject(new Error('Multiplayer library failed to load')); return; }
+        const tryCode = (c, attempts) => {
+          const peer = new G.Peer(PREFIX + c, peerOptions());
+          let done = false;
           peer.on('open', () => {
-            opened = true;
-            this.peer = peer;
-            this.sendTo(this.localPid, { t: 'welcome', pid: this.localPid, code: this.code });
-            this.broadcastLobby();
-            resolve();
-          });
-          peer.on('connection', (conn) => this.accept(conn));
-          peer.on('disconnected', () => {
-            // Lost the signalling server; existing players stay connected, new ones can't join until this works.
-            if (!peer.destroyed) setTimeout(() => !peer.destroyed && peer.reconnect(), 1500);
+            done = true;
+            const n = new Net(peer, true);
+            n.code = c;
+            n.saved = savedPlayers || {};
+            peer.on('connection', (conn) => n.accept(conn));
+            resolve(n);
           });
           peer.on('error', (err) => {
-            if (!opened && err.type === 'unavailable-id' && tries++ < 4) {
-              peer.destroy();
-              this.code = makeCode();
-              attempt();
-            } else if (!opened) {
-              peer.destroy();
-              reject(err);
-            } else {
-              console.warn('peer error', err.type, err);
-            }
+            if (!done && err.type === 'unavailable-id' && attempts < 5) { peer.destroy(); tryCode(makeCode(), attempts + 1); return; }
+            if (!done) { peer.destroy(); reject(new Error(niceError(err))); }
+            else console.warn('peer error', err);
           });
         };
-        attempt();
+        tryCode(code || makeCode(), 0);
       });
     }
 
-    accept(conn) {
-      let pid = null;
-      conn.on('data', (msg) => {
-        if (!msg || typeof msg !== 'object') return;
-        if (!pid) {
-          if (msg.t !== 'hello') return;
-          if (msg.v !== FN.PROTOCOL) {
-            conn.send({ t: 'bye', reason: 'Your game version doesn\'t match the host\'s. Refresh the page.' });
-            setTimeout(() => conn.close(), 300);
-            return;
-          }
-          if (this.players.length >= FN.MAX_PLAYERS) {
-            conn.send({ t: 'bye', reason: 'The room is full.' });
-            setTimeout(() => conn.close(), 300);
-            return;
-          }
-          pid = 'p' + this.nextId++;
-          const late = this.phase !== 'lobby';
-          this.players.push({ pid, name: cleanName(msg.name), role: late ? 'spectator' : this.freeRole(), conn, late });
-          conn.send({ t: 'welcome', pid, code: this.code });
-          if (this.phase !== 'lobby') conn.send({ t: 'start', late: true });
-          this.broadcastLobby();
-          return;
-        }
-        this.handle(pid, msg);
+    static join(code, name) {
+      return new Promise((resolve, reject) => {
+        if (!G.Peer) { reject(new Error('Multiplayer library failed to load')); return; }
+        code = code.trim().toUpperCase();
+        const peer = new G.Peer(undefined, peerOptions());
+        let done = false;
+        const fail = (msg) => { if (!done) { done = true; peer.destroy(); reject(new Error(msg)); } };
+        const timer = setTimeout(() => fail('Could not reach that room. Check the code and that the host is still playing.'), 15000);
+        peer.on('open', () => {
+          const conn = peer.connect(PREFIX + code, { reliable: true });
+          conn.on('open', () => conn.send({ t: 'hello', name }));
+          conn.on('data', (m) => {
+            if (m && m.t === 'welcome' && !done) {
+              done = true;
+              clearTimeout(timer);
+              const n = new Net(peer, false);
+              n.code = code;
+              n.hostConn = conn;
+              n.conns.set(conn.peer, { conn, name: m.hostName });
+              conn.on('data', (msg) => n.onGuestMessage(msg));
+              conn.on('close', () => n.lost('The host closed the world.'));
+              resolve({ net: n, welcome: m });
+            } else if (m && m.t === 'refuse') fail(m.reason);
+          });
+          conn.on('error', (e) => fail(niceError(e)));
+        });
+        peer.on('error', (err) => fail(niceError(err)));
+        peer.on('disconnected', () => { if (done) { try { peer.reconnect(); } catch (e) { /* ignore */ } } });
       });
-      const drop = () => { if (pid) this.removePlayer(pid); pid = null; };
-      conn.on('close', drop);
-      conn.on('error', drop);
     }
-
-    freeRole() {
-      return this.players.filter((p) => p.role === 'guard').length < FN.MAX_GUARDS ? 'guard' : 'spectator';
-    }
-
-    // Guards get a colour by seat order, used for call-outs and the team list.
-    colorOf(pid) {
-      const i = this.players.filter((p) => p.role === 'guard').findIndex((p) => p.pid === pid);
-      return i < 0 ? null : FN.GUARD_COLORS[i % FN.GUARD_COLORS.length];
-    }
-
-    removePlayer(pid) {
-      const p = this.players.find((x) => x.pid === pid);
-      if (!p) return;
-      this.players = this.players.filter((x) => x.pid !== pid);
-      if (this.sim) this.sim.removePlayer(pid);
-      this.broadcastLobby();
-    }
-
-    isHost(pid) { return pid === this.localPid; }
-
-    handle(pid, msg) {
-      const p = this.players.find((x) => x.pid === pid);
-      if (!p) return;
-      switch (msg.t) {
-        case 'in':
-          if (this.sim && this.phase === 'playing') this.sim.input(pid, msg);
-          break;
-        case 'role': {
-          if (this.phase !== 'lobby' || !FN.ROLES.includes(msg.role)) return;
-          const role = msg.role;
-          if (role === 'guard' && p.role !== 'guard' &&
-            this.players.filter((x) => x.role === 'guard').length >= FN.MAX_GUARDS) return;
-          p.role = role;
-          this.broadcastLobby();
-          break;
-        }
-        case 'settings':
-          if (!this.isHost(pid) || this.phase !== 'lobby') return;
-          this.applySettings(msg.settings || {});
-          this.broadcastLobby();
-          break;
-        case 'start':
-          if (this.isHost(pid)) this.startGame();
-          break;
-        case 'lobby':
-          if (this.isHost(pid)) this.toLobby();
-          break;
-      }
-    }
-
-    applySettings(s) {
-      const cur = this.settings;
-      const n = Number(s.night);
-      if (n >= 1 && n <= 7) cur.night = n;
-      if (FN.LENGTHS[s.length]) cur.length = s.length;
-      if (s.custom) for (const c of FN.CHARS) if (c in s.custom) cur.custom[c] = Math.max(0, Math.min(20, s.custom[c] | 0));
-    }
-
-    lobbyState() {
-      return {
-        t: 'lobby', code: this.code, online: this.online, phase: this.phase, settings: this.settings,
-        hostPid: this.localPid,
-        players: this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role, color: this.colorOf(p.pid) })),
-      };
-    }
-
-    broadcastLobby() { this.broadcast(this.lobbyState()); }
-
-    startGame() {
-      if (this.phase === 'playing') return;
-      if (!this.players.some((p) => p.role === 'guard')) {
-        this.sendTo(this.localPid, { t: 'msg', text: 'Someone has to be the night guard!' });
-        return;
-      }
-      this.phase = 'playing';
-      this.sim = new FN.Sim(this.players.map((p) => ({ pid: p.pid, name: p.name, role: p.role, color: this.colorOf(p.pid) })), this.settings);
-      this.broadcastLobby();
-      this.broadcast({ t: 'start' });
-      this.last = performance.now();
-      this.ticker = makeTicker(FN.TUNE.tickMs, () => this.step());
-    }
-
-    step() {
-      const now = performance.now();
-      let dt = (now - this.last) / 1000;
-      this.last = now;
-      // Catch up after hitches in small steps so timers stay fair.
-      dt = Math.min(dt, 2);
-      while (dt > 0) {
-        const d = Math.min(dt, 0.1);
-        this.sim.tick(d);
-        dt -= d;
-      }
-      const snap = this.sim.snapshot();
-      const events = this.sim.takeEvents();
-      this.broadcast({ t: 'snap', s: snap, ev: events });
-      if (this.sim.ended) {
-        this.ticker.stop();
-        this.ticker = null;
-        this.phase = 'results';
-        // Like the original: survive a night and the next one is queued up.
-        const r = this.sim.result;
-        if (r && r.winner === 'guards' && this.settings.night < 6) this.settings.night++;
-        this.broadcastLobby();
-      }
-    }
-
-    toLobby() {
-      if (this.ticker) { this.ticker.stop(); this.ticker = null; }
-      this.sim = null;
-      this.phase = 'lobby';
-      // People who arrived mid-night were only watching for lack of a seat; give them one now.
-      for (const p of this.players) {
-        if (p.late) { p.late = false; p.role = this.freeRole(); }
-      }
-      this.broadcastLobby();
-    }
-
-    sendTo(pid, msg) {
-      const p = this.players.find((x) => x.pid === pid);
-      if (!p) return;
-      if (!p.conn) { this.onLocal(msg); return; }
-      try { if (p.conn.open) p.conn.send(msg); } catch (e) { console.warn('send failed', e); }
-    }
-
-    broadcast(msg) { for (const p of this.players) this.sendTo(p.pid, msg); }
 
     close() {
-      if (this.ticker) this.ticker.stop();
-      for (const p of this.players) if (p.conn) { try { p.conn.send({ t: 'bye', reason: 'The host closed the room.' }); } catch (e) { /* closing anyway */ } }
-      const peer = this.peer;
-      setTimeout(() => peer && peer.destroy(), 200);
-    }
-  }
-
-  // The host's own player: messages go straight into the RoomHost.
-  class LocalLink {
-    constructor(host) { this.host = host; }
-    send(msg) { this.host.handle(this.host.localPid, msg); }
-    close() { this.host.close(); }
-  }
-
-  // A joining player's connection to a remote host.
-  class RemoteLink {
-    constructor({ code, name, onMessage, onClose }) {
-      this.code = code;
-      this.name = cleanName(name);
-      this.onMessage = onMessage;
-      this.onClose = onClose;
-      this.conn = null;
-      this.peer = null;
-      this.closed = false;
-    }
-
-    open() {
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const fail = (text) => {
-          if (settled) return;
-          settled = true;
-          this.shutdown();
-          reject(new Error(text));
-        };
-        const timer = setTimeout(() => fail('Couldn\'t reach that room. Check the code and try again.'), 15000);
-        const peer = (this.peer = new window.Peer(undefined, peerOptions()));
-        peer.on('open', () => {
-          const conn = (this.conn = peer.connect(FN.PEER_PREFIX + this.code, { reliable: true, serialization: 'json' }));
-          conn.on('open', () => conn.send({ t: 'hello', name: this.name, v: FN.PROTOCOL }));
-          conn.on('data', (msg) => {
-            if (!settled && msg && msg.t === 'welcome') { settled = true; clearTimeout(timer); resolve(); }
-            if (!settled && msg && msg.t === 'bye') { clearTimeout(timer); fail(msg.reason); return; }
-            this.onMessage(msg);
-          });
-          conn.on('close', () => {
-            if (!settled) { clearTimeout(timer); fail('The host closed the connection.'); return; }
-            if (!this.closed) { this.closed = true; this.onClose('Lost connection to the host.'); }
-          });
-        });
-        peer.on('error', (err) => {
-          if (!settled) {
-            clearTimeout(timer);
-            fail(err.type === 'peer-unavailable' ? `No room with code ${this.code}. Check the code with your host.`
-              : `Connection problem (${err.type}). Try again.`);
-          } else console.warn('peer error', err.type, err);
-        });
-        peer.on('disconnected', () => { if (!peer.destroyed && !this.closed) setTimeout(() => !peer.destroyed && peer.reconnect(), 1500); });
-      });
-    }
-
-    send(msg) { try { if (this.conn && this.conn.open) this.conn.send(msg); } catch (e) { console.warn('send failed', e); } }
-
-    shutdown() {
+      for (const { conn } of this.conns.values()) { try { conn.close(); } catch (e) { /* ignore */ } }
+      try { this.peer.destroy(); } catch (e) { /* ignore */ }
       this.closed = true;
-      try { if (this.conn) this.conn.close(); } catch (e) { /* already closed */ }
-      try { if (this.peer) this.peer.destroy(); } catch (e) { /* already gone */ }
     }
 
-    close() { this.shutdown(); }
+    lost(msg) { if (this.closed) return; this.closed = true; if (this.game && this.game.onDisconnect) this.game.onDisconnect(msg); }
+
+    // ---------------- host side ----------------
+    accept(conn) {
+      conn.on('data', (m) => {
+        if (!m || !m.t) return;
+        if (m.t === 'hello') return this.welcome(conn, m);
+        const who = this.conns.get(conn.peer);
+        if (!who) return;
+        this.onHostMessage(conn.peer, who, m);
+      });
+      conn.on('close', () => this.drop(conn.peer));
+      conn.on('error', () => this.drop(conn.peer));
+    }
+
+    welcome(conn, m) {
+      const g = this.game;
+      if (!g || !g.running) { conn.send({ t: 'refuse', reason: 'The host is not in a world right now.' }); return; }
+      let name = String(m.name || 'Player').slice(0, 16).replace(/[<>]/g, '') || 'Player';
+      const taken = new Set([g.playerName, ...[...this.conns.values()].map((c) => c.name)]);
+      let k = 2;
+      const base = name;
+      while (taken.has(name)) name = base + k++;
+      this.conns.set(conn.peer, { conn, name });
+      const edits = [];
+      for (const [ck, map] of g.world.edits) if (map.size) edits.push([ck, [...map]]);
+      const saved = this.saved[name];
+      const sp = g.spawn;
+      conn.send({
+        t: 'welcome', seed: g.seed, time: g.time, difficulty: g.difficulty, mode: g.info.mode || 'survival', hostName: g.playerName, name,
+        edits, tiles: [...g.tiles], spawn: sp, you: saved || null, worldName: g.info.name,
+      });
+      g.remotes.set(conn.peer, { id: conn.peer, name, x: sp.x + 0.5, y: sp.y, z: sp.z + 0.5, tx: sp.x + 0.5, ty: sp.y, tz: sp.z + 0.5, yaw: 0, pitch: 0, mode: (saved && saved.mode) || g.info.mode || 'survival', shirt: Math.abs(MC.seedFromString(name)) % 8, local: false, dead: false });
+      const msg = `${name} joined the game`;
+      g.ui.chat(msg, '#ff5');
+      this.broadcast({ t: 'chat', msg, color: '#ff5' }, conn.peer);
+    }
+
+    drop(id) {
+      const who = this.conns.get(id);
+      if (!who) return;
+      this.conns.delete(id);
+      const g = this.game;
+      if (this.isHost && g) {
+        g.remotes.delete(id);
+        const msg = `${who.name} left the game`;
+        g.ui.chat(msg, '#ff5');
+        this.broadcast({ t: 'chat', msg, color: '#ff5' });
+      } else this.lost('Lost connection to the host.');
+    }
+
+    onHostMessage(id, who, m) {
+      const g = this.game;
+      if (!g || !g.running) return;
+      const E = g.entities;
+      switch (m.t) {
+        case 'pos': {
+          const r = g.remotes.get(id);
+          if (!r) return;
+          r.tx = m.x; r.ty = m.y; r.tz = m.z; r.yaw = m.yaw; r.pitch = m.pitch; r.held = m.held; r.sneak = m.sneak; r.mode = m.mode; r.dead = m.dead;
+          if (m.swing) r.swingT = 1;
+          break;
+        }
+        case 'set': for (const [x, y, z, v] of m.list) g.setBlock(x, y, z, v, { remote: true, from: id }); break;
+        case 'drop': E.spawnItem(m.s, m.p[0], m.p[1], m.p[2], m.v[0], m.v[1], m.v[2], 1); break;
+        case 'spawnxp': E.spawnXP(m.p[0], m.p[1], m.p[2], m.v); break;
+        case 'hit': { const e = E.map.get(m.id); if (e) E.hurtMob(e, m.dmg, m.kx, m.kz, id); break; }
+        case 'interact': {
+          const e = E.map.get(m.id);
+          const res = e ? E.interact(e, { id: m.item, n: 1 }, g.remotes.get(id)) : null;
+          if (res) this.sendTo(id, { t: 'interactResult', res });
+          break;
+        }
+        case 'arrow': E.spawnArrow(m.p[0], m.p[1], m.p[2], m.v[0], m.v[1], m.v[2], id, 2 + m.c * 2); break;
+        case 'prime': E.spawnTNT(m.p[0], m.p[1], m.p[2]); break;
+        case 'openTile': {
+          const [x, y, z] = m.k.split(',').map(Number);
+          const b = g.world.def(x, y, z);
+          if (b && (b.use === 'chest' || b.use === 'furnace')) this.sendTo(id, { t: 'tile', k: m.k, tile: g.tileFor(x, y, z), open: true });
+          break;
+        }
+        case 'tile': {
+          if (!m.tile) break;
+          const t = g.tiles.get(m.k);
+          if (!t) break;
+          t.slots = m.tile.slots.map(MC.Inv.clone);
+          t.dirty = true;
+          if (g.ui.win && g.ui.win.tileKey === m.k) { g.ui.win.tile.slots = t.slots; g.ui.refresh(); }
+          this.broadcast({ t: 'tile', k: m.k, tile: t }, id);
+          break;
+        }
+        case 'sleep':
+          if (!g.isDay()) { g.time = 0; this.broadcast({ t: 'time', time: 0 }); g.ui.chat(`${who.name} slept through the night`); }
+          break;
+        case 'chat': g.ui.chat(m.msg, m.color); this.broadcast({ t: 'chat', msg: m.msg, color: m.color }, id); break;
+        case 'pstate': this.saved[who.name] = m.data; break;
+      }
+    }
+
+    // ---------------- guest side ----------------
+    onGuestMessage(m) {
+      const g = this.game;
+      if (!g || !g.running || !m) return;
+      switch (m.t) {
+        case 'set':
+          for (const [x, y, z, v] of m.list) {
+            const old = g.world.get(x, y, z);
+            if (g.world.set(x, y, z, v, { remote: true }) && old > 0 && v === 0 && Math.hypot(x - g.player.x, y - g.player.y, z - g.player.z) < 24) {
+              g.entities.blockParticles(x, y, z, old, 8);
+              g.audio.block(MC.BLOCKS[old & MC.ID_MASK].sound, 'break', { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+            }
+          }
+          break;
+        case 'ents': g.entities.applySnapshot(m.list); break;
+        case 'players': {
+          const seen = new Set();
+          for (const [id, name, x, y, z, yaw, pitch, held, sneak, mode, dead, swing] of m.list) {
+            if (id === this.id) continue;
+            seen.add(id);
+            let r = g.remotes.get(id);
+            if (!r) { r = { id, name, x, y, z, shirt: Math.abs(MC.seedFromString(name)) % 8, local: false }; g.remotes.set(id, r); }
+            Object.assign(r, { name, tx: x, ty: y, tz: z, yaw, pitch, held, sneak, mode, dead });
+            if (swing) r.swingT = 1;
+          }
+          for (const id of [...g.remotes.keys()]) if (!seen.has(id)) g.remotes.delete(id);
+          break;
+        }
+        case 'time': g.time = m.time; break;
+        case 'chat': g.ui.chat(m.msg, m.color); break;
+        case 'give': { const left = MC.Inv.add(g.inv.main, m.s, MC.Inv.PICKUP_ORDER); if (left) g.dropStack({ ...m.s, n: left }); g.audio.play('pop', null, 0.4); g.invChanged(); break; }
+        case 'xp': g.giveXP(g.localPlayer(), m.v); break;
+        case 'hurt': g.damage(m.dmg, m.info || {}); break;
+        case 'interactResult': g.applyInteract(m.res); break;
+        case 'boom': g.entities.boomParticles(m.p[0], m.p[1], m.p[2], m.r); g.audio.play('explode', { x: m.p[0], y: m.p[1], z: m.p[2] }, 1.2); break;
+        case 'tile': {
+          if (!m.tile) { g.tiles.delete(m.k); if (g.ui.win && g.ui.win.tileKey === m.k) g.ui.closeWindow(); break; }
+          let t = g.tiles.get(m.k);
+          if (!t) { t = m.tile; g.tiles.set(m.k, t); } else Object.assign(t, m.tile);
+          t.dirty = true;
+          if (m.open && g.pendingTile && g.pendingTile.k === m.k) { g.showTile(m.k, t, g.pendingTile.b); g.pendingTile = null; }
+          else if (g.ui.win && g.ui.win.tileKey === m.k) { g.ui.win.tile = t; g.ui.refresh(); }
+          break;
+        }
+      }
+    }
+
+    // ---------------- sending ----------------
+    send(m) { if (this.hostConn && this.hostConn.open) this.hostConn.send(m); }
+    sendTo(id, m) { const c = this.conns.get(id); if (c && c.conn.open) c.conn.send(m); }
+    broadcast(m, except) { for (const [id, c] of this.conns) if (id !== except && c.conn.open) c.conn.send(m); }
+
+    edit(x, y, z, v, from) { this.outEdits.push([x, y, z, v, from || null]); }
+
+    chat(msg, system) {
+      if (this.isHost) this.broadcast({ t: 'chat', msg, color: system ? '#f88' : null });
+      else this.send({ t: 'chat', msg, color: system ? '#f88' : null });
+    }
+    tile(k, t) {
+      const data = t ? { type: t.type, kind: t.kind, slots: t.slots, burn: t.burn, burnMax: t.burnMax, cook: t.cook, cookMax: t.cookMax } : null;
+      if (this.isHost) this.broadcast({ t: 'tile', k, tile: data });
+      else if (t) this.send({ t: 'tile', k, tile: data });
+    }
+
+    savedPlayers() {
+      return this.saved;
+    }
+
+    // Called every frame.
+    update(dt) {
+      const g = this.game;
+      if (!g || this.closed) return;
+      const T = this.timers;
+      for (const k in T) T[k] += dt;
+      // smooth remote players
+      const kk = Math.min(1, dt * 12);
+      for (const r of g.remotes.values()) {
+        if (r.tx == null) continue;
+        const ox = r.x, oz = r.z;
+        r.x += (r.tx - r.x) * kk; r.y += (r.ty - r.y) * kk; r.z += (r.tz - r.z) * kk;
+        const sp = Math.hypot(r.x - ox, r.z - oz) / Math.max(dt, 0.001);
+        r.speed = Math.min(1, sp / 4);
+        r.walk = (r.walk || 0) + sp * dt * 1.6;
+        if (r.swingT > 0) r.swingT -= dt * 3;
+      }
+      if (T.edits >= 0.05 && this.outEdits.length) {
+        T.edits = 0;
+        if (this.isHost) {
+          for (const [id, c] of this.conns) {
+            if (!c.conn.open) continue;
+            const list = this.outEdits.filter((e) => e[4] !== id).map((e) => e.slice(0, 4));
+            if (list.length) c.conn.send({ t: 'set', list });
+          }
+        } else this.send({ t: 'set', list: this.outEdits.filter((e) => !e[4]).map((e) => e.slice(0, 4)) });
+        this.outEdits = [];
+      }
+      const p = g.player;
+      const st = g.inv.main[g.selected];
+      if (this.isHost) {
+        if (T.pos >= 0.1) {
+          T.pos = 0;
+          const list = [[this.id, g.playerName, +p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2), +p.yaw.toFixed(2), +p.pitch.toFixed(2), st && st.id, p.sneaking, p.mode, g.dead, g.swing > 0.9]];
+          for (const r of g.remotes.values()) list.push([r.id, r.name, +r.tx.toFixed(2), +r.ty.toFixed(2), +r.tz.toFixed(2), +(r.yaw || 0).toFixed(2), +(r.pitch || 0).toFixed(2), r.held, r.sneak, r.mode, r.dead, r.swingT > 0.9]);
+          this.broadcast({ t: 'players', list });
+        }
+        if (T.ents >= 0.1) {
+          T.ents = 0;
+          for (const [id, c] of this.conns) {
+            const r = g.remotes.get(id);
+            if (!r || !c.conn.open) continue;
+            c.conn.send({ t: 'ents', list: g.entities.snapshotFor(r.tx, r.tz) });
+          }
+        }
+        if (T.time >= 5) { T.time = 0; this.broadcast({ t: 'time', time: g.time }); }
+      } else {
+        if (T.pos >= 0.1) {
+          T.pos = 0;
+          this.send({ t: 'pos', x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3), held: st && st.id, sneak: p.sneaking, mode: p.mode, dead: g.dead || p.frozen, swing: g.swing > 0.85 });
+        }
+        if (T.pstate >= 5) { T.pstate = 0; this.send({ t: 'pstate', data: g.playerData() }); }
+      }
+    }
   }
 
-  FN.Net = { RoomHost, LocalLink, RemoteLink, cleanName };
-})();
+  function niceError(err) {
+    const t = err && err.type;
+    if (t === 'peer-unavailable') return 'No room with that code. Check the code and that the host is still playing.';
+    if (t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed') return 'Could not reach the multiplayer server. Your network or a privacy blocker may be stopping it.';
+    if (t === 'browser-incompatible') return 'This browser does not support multiplayer (WebRTC).';
+    if (t === 'unavailable-id') return 'That room code is already in use.';
+    return (err && err.message) || 'Multiplayer error';
+  }
+
+  MC.Net = Net;
+})(globalThis);
