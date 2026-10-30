@@ -19,8 +19,7 @@
       this.pending = [];
       this.onEdit = null; // (x, y, z, v) for multiplayer / saving
       this.meshCount = 0;
-      this.worker = new Worker('js/world-worker.js');
-      this.worker.onmessage = (e) => this.onMessage(e.data);
+      this.worker = new WorldWorker((m) => this.onMessage(m));
       this.worker.postMessage({ t: 'init', seed });
       this.lastCenter = null;
     }
@@ -227,6 +226,51 @@
   }
 
   const FULL_BOX = [[0, 0, 0, 1, 1, 1]];
+
+  // The world normally runs in a Web Worker. If workers are blocked (some privacy tools do that),
+  // the same script runs on the page instead: a bit slower, but the game still works.
+  class WorldWorker {
+    constructor(onMessage) {
+      this.onMessage = onMessage;
+      this.queue = [];
+      this.ok = false;
+      this.inline = null;
+      try {
+        this.w = new Worker('js/world-worker.js');
+        this.w.onmessage = (e) => { if (!this.ok) { this.ok = true; this.queue = []; clearTimeout(this.timer); } this.onMessage(e.data); };
+        this.w.onerror = (e) => { if (!this.ok) { if (e.preventDefault) e.preventDefault(); this.fallback(); } };
+        // nothing back at all after a while: probably blocked without an error
+        this.timer = setTimeout(() => { if (!this.ok) this.fallback(); }, 8000);
+      } catch (e) { this.fallback(); }
+    }
+    postMessage(m) {
+      if (this.inline) { this.inline(m); return; }
+      if (!this.ok) this.queue.push(m);
+      if (this.w) this.w.postMessage(m);
+    }
+    fallback() {
+      if (this.inline || this.starting || this.dead) return;
+      this.starting = true;
+      clearTimeout(this.timer);
+      if (this.w) { try { this.w.terminate(); } catch (e) { /* ignore */ } this.w = null; }
+      MC.workerMode = 'page';
+      fetch('js/world-worker.js').then((r) => r.text()).then((src) => {
+        if (this.dead) return;
+        const post = (msg) => { Promise.resolve().then(() => { if (!this.dead) this.onMessage(msg); }); };
+        const make = new Function('postMessage', 'importScripts', 'self', 'let onmessage;\n' + src.replace("'use strict';", '') + '\n;return (m) => onmessage({ data: m });');
+        this.inline = make(post, () => {}, G);
+        this.ok = true;
+        for (const m of this.queue) this.inline(m);
+        this.queue = [];
+      }).catch((e) => console.error('world worker failed', e));
+    }
+    terminate() {
+      this.dead = true;
+      clearTimeout(this.timer);
+      if (this.w) this.w.terminate();
+      if (this.inline) this.inline({ t: 'stop' });
+    }
+  }
 
   function rayBox(ox, oy, oz, dx, dy, dz, x0, y0, z0, x1, y1, z1) {
     let tmin = -Infinity, tmax = Infinity, face = -1;

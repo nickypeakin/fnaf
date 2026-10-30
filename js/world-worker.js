@@ -488,10 +488,14 @@ function processMeshes(budgetMs) {
   }
 }
 
+// When Web Workers are blocked this script runs on the page itself, so it works in smaller slices.
+const ON_PAGE = typeof document !== 'undefined';
+let stopped = false;
 function loop() {
-  processGen(14);
-  processMeshes(12);
-  setTimeout(loop, genQueue.length || dirty.size ? 0 : 30);
+  if (stopped) return;
+  processGen(ON_PAGE ? 5 : 14);
+  processMeshes(ON_PAGE ? 4 : 12);
+  setTimeout(loop, genQueue.length || dirty.size ? (ON_PAGE ? 4 : 0) : 30);
 }
 
 onmessage = (e) => {
@@ -503,6 +507,9 @@ onmessage = (e) => {
       break;
     case 'focus':
       focus = m.pos;
+      break;
+    case 'stop':
+      stopped = true;
       break;
     case 'load': {
       // wanted: whether this chunk should be meshed (inside view distance) or only generated as a neighbour

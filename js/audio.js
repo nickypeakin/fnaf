@@ -13,6 +13,10 @@
     }
 
     unlock() {
+      try { this.start(); } catch (e) { this.ctx = null; this.failed = true; }
+    }
+    start() {
+      if (this.failed) return;
       if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
       const AC = G.AudioContext || G.webkitAudioContext;
       if (!AC) return;
@@ -85,6 +89,9 @@
     // Material sounds: kind = 'break' | 'place' | 'hit' | 'step'
     block(material, kind, pos) {
       if (!this.ctx) return;
+      try { this.blockSound(material, kind, pos); } catch (e) { /* sound is optional */ }
+    }
+    blockSound(material, kind, pos) {
       const vol = kind === 'step' ? 0.18 : kind === 'hit' ? 0.22 : 0.55;
       const d = this.out(pos, vol);
       if (!d) return;
@@ -107,6 +114,9 @@
 
     play(name, pos, vol = 1) {
       if (!this.ctx) return;
+      try { this.playSound(name, pos, vol); } catch (e) { /* sound is optional */ }
+    }
+    playSound(name, pos, vol) {
       const d = this.out(pos, vol);
       if (!d) return;
       const t = this.ctx.currentTime;

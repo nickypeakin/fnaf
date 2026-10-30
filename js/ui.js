@@ -9,12 +9,12 @@
   const $ = (id) => document.getElementById(id);
 
   // ---------- tiny pixel icons for the status bars ----------
+  // (SVG rather than canvas, so they work when canvas is blocked)
   function pix(rows, pal) {
-    const c = document.createElement('canvas');
-    c.width = rows[0].length; c.height = rows.length;
-    const g = c.getContext('2d');
-    rows.forEach((row, y) => [...row].forEach((ch, x) => { if (pal[ch]) { g.fillStyle = pal[ch]; g.fillRect(x, y, 1, 1); } }));
-    return c.toDataURL();
+    const w = rows[0].length, h = rows.length;
+    let s = `<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}' shape-rendering='crispEdges'>`;
+    rows.forEach((row, y) => [...row].forEach((ch, x) => { if (pal[ch]) s += `<rect x='${x}' y='${y}' width='1' height='1' fill='${pal[ch]}'/>`; }));
+    return 'data:image/svg+xml,' + encodeURIComponent(s + '</svg>');
   }
   const heartRows = ['.##..##.', '#rr##rr#', '#wrrrrr#', '#rrrrrr#', '.#rrrr#.', '..#rr#..', '...##...', '........'];
   const halfPal = { '#': '#000', r: '#d01010', w: '#ff8080' };
@@ -107,7 +107,7 @@
       const surv = p.mode === 'survival';
       $('stats').style.visibility = surv ? 'visible' : 'hidden';
       $('xp-bar').style.visibility = surv ? 'visible' : 'hidden';
-      const set = (els, val, full, half, empty) => els.forEach((el, i) => { const v = val - i * 2; el.style.backgroundImage = `url(${v >= 2 ? ICONS[full] : v === 1 ? ICONS[half] : ICONS[empty]})`; });
+      const set = (els, val, full, half, empty) => els.forEach((el, i) => { const v = val - i * 2; el.style.backgroundImage = `url("${v >= 2 ? ICONS[full] : v === 1 ? ICONS[half] : ICONS[empty]}")`; });
       set(this.hearts, Math.ceil(g.health), 'heart', 'heartHalf', 'heartEmpty');
       set(this.foods, Math.ceil(g.food), 'food', 'foodHalf', 'foodEmpty');
       const ap = g.armorPoints();
@@ -116,7 +116,7 @@
       const showAir = p.eyeInWater || g.air < 300;
       $('air-bar').style.visibility = showAir ? 'visible' : 'hidden';
       const bubbles = Math.ceil(g.air / 30);
-      this.bubbles.forEach((el, i) => { el.style.backgroundImage = i < bubbles ? `url(${ICONS.bubble})` : 'none'; });
+      this.bubbles.forEach((el, i) => { el.style.backgroundImage = i < bubbles ? `url("${ICONS.bubble}")` : 'none'; });
       $('xp-fill').style.width = Math.round(g.xpProgress * 100) + '%';
       $('xp-level').textContent = g.xpLevel > 0 ? g.xpLevel : '';
       if (oldSel !== g.selected || this.lastHeld !== (inv.main[g.selected] && inv.main[g.selected].id)) {

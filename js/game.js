@@ -368,6 +368,9 @@
       canvas.addEventListener('contextmenu', (e) => e.preventDefault());
       document.addEventListener('mousemove', (e) => {
         if (!this.running || !this.locked()) return;
+        // browsers report one big bogus jump right after the mouse is captured
+        if (this.skipMoves > 0) { this.skipMoves--; return; }
+        if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
         this.look(e.movementX, e.movementY);
       });
       document.addEventListener('wheel', (e) => {
@@ -375,6 +378,7 @@
         this.selectSlot((this.selected + (e.deltaY > 0 ? 1 : -1) + 9) % 9);
       }, { passive: true });
       document.addEventListener('pointerlockchange', () => {
+        if (this.locked()) this.skipMoves = 2;
         if (!this.running) return;
         if (!this.locked() && !this.ui.open && !this.chatOpen && !this.touch.active && !this.dead && !this.suppressPause) this.onPause && this.onPause();
         this.suppressPause = false;

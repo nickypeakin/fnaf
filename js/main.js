@@ -38,14 +38,28 @@
   function errorScreen(msg) { $('error-msg').textContent = msg; show('menu-error'); }
 
   // ---------------- renderer ----------------
+  // "Fast" draws with WebGL. "Compatible" draws everything in JavaScript and shows each frame as a
+  // plain image, for browsers or privacy tools that block WebGL and canvas. "Auto" tries WebGL,
+  // checks that it really draws, and otherwise switches to compatible graphics.
   const canvas = $('game');
-  let renderer;
-  try { renderer = new MC.Renderer(canvas); }
-  catch (e) {
-    errorScreen('3D graphics (WebGL 2) are switched off or blocked in this browser. Blockcraft needs them to draw the world — please allow WebGL for this site in your privacy or anti-fingerprinting settings, or try another browser. (' + e.message + ')');
-    for (const b of document.querySelectorAll('#menu-error button')) b.style.display = 'none';
-    return;
+  const gfxParam = new URLSearchParams(location.search).get('gfx');
+  const gfx = ['auto', 'fast', 'compat'].includes(gfxParam) ? gfxParam : settings.gfx || 'auto';
+  let renderer = null;
+  if (gfx === 'fast' || (gfx === 'auto' && !settings.webglBlocked)) {
+    try {
+      const r = new MC.Renderer(canvas);
+      if (r.selfTest()) renderer = r;
+      else r.dispose();
+    } catch (e) { renderer = null; }
+    if (!renderer && gfx === 'auto') { settings.webglBlocked = true; saveSettings(); }
   }
+  if (!renderer) {
+    canvas.remove();
+    $('view').classList.remove('hidden');
+    renderer = new MC.SoftRenderer($('view'));
+    if (!settings.compatSetup) { settings.compatSetup = true; settings.dist = Math.min(settings.dist, 4); settings.scale = Math.min(settings.scale, 80); saveSettings(); }
+  }
+  $('gfx-note').textContent = renderer.software ? 'Graphics: compatible mode (no WebGL needed)' : 'Graphics: fast (WebGL)';
   const audio = new MC.Audio();
   audio.setVolume(settings.vol / 100);
   game = new MC.Game(renderer, audio, settings);
@@ -54,20 +68,6 @@
   let worldRecord = null;
 
   renderer.loadTextures().catch((e) => errorScreen('Could not load textures: ' + e.message));
-  // the classic dirt backdrop for menus, cut out of the texture atlas
-  (function menuBackground() {
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement('canvas');
-      c.width = c.height = 16;
-      const i = MC.TEX.dirt, cols = MC.ATLAS.cols;
-      c.getContext('2d').drawImage(img, (i % cols) * 16, Math.floor(i / cols) * 16, 16, 16, 0, 0, 16, 16);
-      document.documentElement.style.setProperty('--menu-bg', `url(${c.toDataURL()})`);
-    };
-    img.src = 'assets/terrain.png';
-  })();
-
-  // a slowly turning background world on the title screen would be nice, but keep it simple: a dark backdrop
 
   // ---------------- world list ----------------
   async function refreshWorlds() {
@@ -240,6 +240,8 @@
   ];
   function fillSettings() {
     for (const [id, key, fmt] of S) { $(id).value = settings[key]; $('v-' + id.slice(2)).textContent = fmt(settings[key]); }
+    $('s-gfx').value = settings.gfx || 'auto';
+    $('v-gfx').textContent = '';
     $('s-bob').checked = settings.bob !== false;
     $('s-invert').checked = !!settings.invert;
   }
@@ -253,6 +255,21 @@
     });
   }
   $('s-bob').onchange = () => { settings.bob = $('s-bob').checked; saveSettings(); };
+  $('s-gfx').onchange = () => {
+    settings.gfx = $('s-gfx').value;
+    if (settings.gfx !== 'compat') settings.webglBlocked = false;
+    saveSettings();
+    if (game.running) $('v-gfx').textContent = '(after you return to the title and reload)';
+    else location.reload();
+  };
+  $('gfx-switch').onclick = (e) => {
+    e.preventDefault();
+    settings.gfx = renderer.software ? 'fast' : 'compat';
+    settings.webglBlocked = false;
+    saveSettings();
+    location.href = location.pathname;
+  };
+  $('gfx-switch').textContent = renderer.software ? 'Try fast graphics' : 'Screen black? Use compatible graphics';
   $('s-invert').onchange = () => { settings.invert = $('s-invert').checked; saveSettings(); };
   $('btn-settings-done').onclick = () => show(game.running ? 'menu-pause' : 'menu-title');
 

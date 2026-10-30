@@ -9,6 +9,7 @@
 </head>
 <body>
   <canvas id="game"></canvas>
+  <div id="view" class="hidden"><img id="view-img" alt="" draggable="false"></div>
 
   <!-- in-game overlay -->
   <div id="hud" class="hidden">
@@ -62,6 +63,7 @@
         <button data-go="menu-settings">Options…</button>
         <button data-go="menu-help">How to Play</button>
       </div>
+      <p class="hint gfx"><span id="gfx-note"></span> · <a href="#" id="gfx-switch"></a></p>
       <div class="foot">Not affiliated with Mojang or Microsoft. All art is original.</div>
     </section>
 
@@ -108,6 +110,13 @@
 
     <section id="menu-settings" class="menu hidden">
       <h2>Options</h2>
+      <label>Graphics <span id="v-gfx"></span>
+        <select id="s-gfx">
+          <option value="auto">Automatic</option>
+          <option value="fast">Fast (needs WebGL)</option>
+          <option value="compat">Compatible (works with privacy blockers)</option>
+        </select>
+      </label>
       <label>Render distance <span id="v-dist"></span><input type="range" id="s-dist" min="2" max="12" step="1"></label>
       <label>Field of view <span id="v-fov"></span><input type="range" id="s-fov" min="50" max="110" step="1"></label>
       <label>Mouse sensitivity <span id="v-sens"></span><input type="range" id="s-sens" min="10" max="200" step="1"></label>
@@ -175,6 +184,7 @@
   <script src="js/worldgen.js"></script>
   <script src="js/recipes.js"></script>
   <script src="js/renderer.js"></script>
+  <script src="js/soft-renderer.js"></script>
   <script src="js/world.js"></script>
   <script src="js/player.js"></script>
   <script src="js/audio.js"></script>

@@ -84,7 +84,7 @@ void main() {
   vec3 d = normalize(w.xyz / w.w);
   float h = clamp(d.y, -1.0, 1.0);
   vec3 c = mix(u_horizon, u_zenith, smoothstep(-0.05, 0.6, h));
-  if (h < 0.0) c = mix(u_horizon, u_horizon * 0.6, smoothstep(0.0, -0.4, h));
+  if (h < 0.0) c = u_horizon;
   // stars
   if (u_night > 0.0 && h > 0.0) {
     vec2 g = floor(vec2(atan(d.z, d.x), asin(h)) * 180.0);
@@ -218,6 +218,45 @@ void main() {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
       gl.bindVertexArray(null);
       this.models = new Map();
+    }
+
+    // Draw into a tiny off-screen target and read it back. Some browsers and privacy extensions hand
+    // out a WebGL context but block or scramble what it draws; then we use the compatible renderer.
+    selfTest() {
+      const gl = this.gl;
+      try {
+        if (gl.isContextLost()) return false;
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 4, 4, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.viewport(0, 0, 4, 4);
+        gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        const l = this.lines, id = M.identity(M.create());
+        gl.useProgram(l.p);
+        gl.uniformMatrix4fv(l.u.u_proj, false, id);
+        gl.uniformMatrix4fv(l.u.u_view, false, id);
+        gl.uniform3f(l.u.u_origin, 0, 0, 0);
+        gl.uniform4f(l.u.u_color, 0.2, 0.6, 0.8, 1);
+        gl.bindVertexArray(this.lineVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0]), gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        const px = new Uint8Array(4);
+        gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fb); gl.deleteTexture(tex);
+        gl.bindVertexArray(null);
+        return Math.abs(px[0] - 51) < 6 && Math.abs(px[1] - 153) < 6 && Math.abs(px[2] - 204) < 6 && gl.getError() === gl.NO_ERROR;
+      } catch (e) { return false; }
+    }
+
+    dispose() {
+      try { const ext = this.gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* ignore */ }
     }
 
     async loadTextures() {
